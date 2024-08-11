@@ -87,7 +87,6 @@ jobs:
 # Temporary 30 day certificate, not needed for Microsoft Store
 #          windows_certs: ${{ secrets.windows_certs }}
 #          windows_certs_password: ${{ secrets.windows_certs_password }}
-        env:
 
       - name: (MacOS) Upload to Mac App Store
         if: startsWith(matrix.os, 'macos') && env.is_tag == 'true'
