@@ -84,17 +84,6 @@ jobs:
 
           max_attempts: 1
 
-          mac_certs: ${{ secrets.mac_certs }}
-          mac_certs_password: ${{ secrets.mac_certs_password }}
-
-# Temporary 30 day certificate, not needed for Microsoft Store
-#          windows_certs: ${{ secrets.windows_certs }}
-#          windows_certs_password: ${{ secrets.windows_certs_password }}
-        env:
-          APPLE_API_KEY: ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.api_key_id }}.p8
-          APPLE_API_KEY_ID: ${{ secrets.api_key_id }}
-          APPLE_API_ISSUER: ${{ secrets.api_key_issuer_id }}
-
       - name: (MacOS) Upload to Mac App Store
         if: startsWith(matrix.os, 'macos') && env.is_tag == 'true'
         run: |
