@@ -35,20 +35,20 @@ yarn dev
 
 This will sign using the development provisioning profile:
 
-```
+```bash
 yarn pack-mas-dev
 ```
 
 MAS builds have some restrictions, see `isMasBuild` variable in code. In particular, any file cannot be read without the user's consent.
 
-NOTE: when MAS (dev) build, Application Support will instead be here:
+NOTE: when MAS (dev) build, Application Support will instead be located here:
 ```
 ~/Library/Containers/no.mifi.losslesscut-mac/Data/Library/Application Support
 ```
 
 ### Starting over fresh
 
-```
+```bash
 rm -rf ~/Library/Containers/no.mifi.losslesscut-mac
 ```
 
@@ -100,7 +100,7 @@ yarn pack-mas-dev
 cat dist/mas-dev-arm64/LosslessCut.app/Contents/Info.plist
 ```
 
-```
+```xml
 <key>LSMinimumSystemVersion</key>
 <string>10.13</string>
 ```
@@ -118,23 +118,25 @@ Links:
 
 ### Keep dependencies up to date
 - ffmpeg
-- electron
-- package.json
+- `electron`, `@electron/remote` and upgrade [electron.vite.config.ts](./electron.vite.config.ts) `target`s.
+- `package.json`
 
 ### i18n
-`yarn scan-i18n`
+```bash
+yarn scan-i18n
+```
 
 ### Licenses
 
 #### Generate summary
 
-```
+```bash
 npx license-checker --summary
 ```
 
 #### Regenerate licenses file
 
-```
+```bash
 yarn generate-licenses
 #cp licenses.txt losslesscut.mifi.no/public/
 ```

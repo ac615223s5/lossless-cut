@@ -66,6 +66,7 @@ export interface Config {
   movFastStart: boolean,
   avoidNegativeTs: AvoidNegativeTs,
   hideNotifications: 'all' | undefined,
+  hideOsNotifications: 'all' | undefined,
   autoLoadTimecode: boolean,
   segmentsToChapters: boolean,
   preserveMetadataOnMerge: boolean,
@@ -106,9 +107,10 @@ export interface Waveform {
   buffer: Buffer,
 }
 
-export interface ApiKeyboardActionRequest {
+export interface ApiActionRequest {
   id: number
   action: string
+  args?: unknown[] | undefined,
 }
 
 export type Html5ifyMode = 'fastest' | 'fast-audio-remux' | 'fast-audio' | 'fast' | 'slow' | 'slow-audio' | 'slowest';

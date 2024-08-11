@@ -1,11 +1,9 @@
-/// <reference types="electron-vite/node" />
 process.traceDeprecation = true;
 process.traceProcessWarnings = true;
 
 /* eslint-disable import/first */
 // eslint-disable-next-line import/no-extraneous-dependencies
-import electron, { AboutPanelOptionsOptions, BrowserWindow, BrowserWindowConstructorOptions, nativeTheme, shell, app, ipcMain } from 'electron';
-import unhandled from 'electron-unhandled';
+import electron, { AboutPanelOptionsOptions, BrowserWindow, BrowserWindowConstructorOptions, nativeTheme, shell, app, ipcMain, Notification, NotificationConstructorOptions } from 'electron';
 import i18n from 'i18next';
 import debounce from 'lodash/debounce';
 import yargsParser from 'yargs-parser';
@@ -18,6 +16,7 @@ import logger from './logger.js';
 import menu from './menu.js';
 import * as configStore from './configStore.js';
 import { isLinux } from './util.js';
+import { appName, copyrightYear } from './common.js';
 import attachContextMenu from './contextMenu.js';
 import HttpServer from './httpServer.js';
 import isDev from './isDev.js';
@@ -27,7 +26,7 @@ import { checkNewVersion } from './updateChecker.js';
 import * as i18nCommon from './i18nCommon.js';
 
 import './i18n.js';
-import { ApiKeyboardActionRequest } from '../../types.js';
+import { ApiActionRequest } from '../../types.js';
 
 export * as ffmpeg from './ffmpeg.js';
 
@@ -41,14 +40,19 @@ export { isLinux, isWindows, isMac, platform } from './util.js';
 
 export { pathToFileURL } from 'node:url';
 
+export { downloadMediaUrl } from './ffmpeg.js';
 
-// https://www.i18next.com/overview/typescript#argument-of-type-defaulttfuncreturn-is-not-assignable-to-parameter-of-type-xyz
-// todo This should not be necessary anymore since v23.0.0
-declare module 'i18next' {
-  interface CustomTypeOptions {
-    returnNull: false;
+
+const electronUnhandled = import('electron-unhandled');
+
+// eslint-disable-next-line unicorn/prefer-top-level-await
+(async () => {
+  try {
+    (await electronUnhandled).default({ showDialog: true, logger: (err) => logger.error('electron-unhandled', err) });
+  } catch (err) {
+    logger.error(err);
   }
-}
+})();
 
 // eslint-disable-next-line unicorn/prefer-export-from
 export { isDev };
@@ -60,12 +64,6 @@ app.commandLine.appendSwitch('enable-blink-features', 'AudioVideoTracks');
 
 remote.initialize();
 
-unhandled({
-  showDialog: true,
-});
-
-const appName = 'LosslessCut';
-const copyrightYear = 2024;
 
 const appVersion = app.getVersion();
 
@@ -107,19 +105,19 @@ let disableNetworking: boolean;
 
 const openFiles = (paths: string[]) => mainWindow!.webContents.send('openFiles', paths);
 
-let apiKeyboardActionRequestsId = 0;
-const apiKeyboardActionRequests = new Map<number, () => void>();
+let apiActionRequestsId = 0;
+const apiActionRequests = new Map<number, () => void>();
 
-async function sendApiKeyboardAction(action: string) {
+async function sendApiAction(action: string, args?: unknown[]) {
   try {
-    const id = apiKeyboardActionRequestsId;
-    apiKeyboardActionRequestsId += 1;
-    mainWindow!.webContents.send('apiKeyboardAction', { id, action } satisfies ApiKeyboardActionRequest);
+    const id = apiActionRequestsId;
+    apiActionRequestsId += 1;
+    mainWindow!.webContents.send('apiAction', { id, action, args } satisfies ApiActionRequest);
     await new Promise<void>((resolve) => {
-      apiKeyboardActionRequests.set(id, resolve);
+      apiActionRequests.set(id, resolve);
     });
   } catch (err) {
-    logger.error('sendApiKeyboardAction', err);
+    logger.error('sendApiAction', err);
   }
 }
 
@@ -269,7 +267,7 @@ function initApp() {
     logger.info('second-instance', argv2);
 
     if (argv2._ && argv2._.length > 0) openFilesEventually(argv2._.map(String));
-    else if (argv2['keyboardAction']) sendApiKeyboardAction(argv2['keyboardAction']);
+    else if (argv2['keyboardAction']) sendApiAction(argv2['keyboardAction']);
   });
 
   // Quit when all windows are closed.
@@ -317,8 +315,8 @@ function initApp() {
 
   ipcMain.handle('showItemInFolder', (_e, path) => shell.showItemInFolder(path));
 
-  ipcMain.on('apiKeyboardActionResponse', (_e, { id }) => {
-    apiKeyboardActionRequests.get(id)?.();
+  ipcMain.on('apiActionResponse', (_e, { id }) => {
+    apiActionRequests.get(id)?.();
   });
 }
 
@@ -367,7 +365,7 @@ const readyPromise = app.whenReady();
 
     if (httpApi != null) {
       const port = typeof httpApi === 'number' ? httpApi : 8080;
-      const { startHttpServer } = HttpServer({ port, onKeyboardAction: sendApiKeyboardAction });
+      const { startHttpServer } = HttpServer({ port, onKeyboardAction: sendApiAction });
       await startHttpServer();
       logger.info('HTTP API listening on port', port);
     }
@@ -410,3 +408,12 @@ export function quitApp() {
 }
 
 export const hasDisabledNetworking = () => !!disableNetworking;
+
+export const setProgressBar = (v: number) => mainWindow?.setProgressBar(v);
+
+export function sendOsNotification(options: NotificationConstructorOptions) {
+  if (!Notification.isSupported()) return;
+  const notification = new Notification(options);
+  notification.on('failed', (_e, error) => logger.warn('Notification failed', error));
+  notification.show();
+}
