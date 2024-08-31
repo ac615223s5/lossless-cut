@@ -2,8 +2,8 @@ name: Build/release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - master
   schedule:
     - cron: '0 10 * * *'
   workflow_dispatch:
