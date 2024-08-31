@@ -1,4 +1,4 @@
-import { CSSProperties, ChangeEventHandler, memo, useCallback, useMemo, useState } from 'react';
+import { CSSProperties, ChangeEventHandler, TdHTMLAttributes, memo, useCallback, useMemo, useState } from 'react';
 import { FaYinYang, FaKeyboard } from 'react-icons/fa';
 import { GlobeIcon, CleanIcon, CogIcon, Button, NumericalIcon, FolderCloseIcon, DocumentIcon, TimeIcon, CrossIcon } from 'evergreen-ui';
 import { useTranslation } from 'react-i18next';
@@ -30,7 +30,7 @@ const Row = (props: HTMLMotionProps<'tr'>) => (
   />
 );
 // eslint-disable-next-line react/jsx-props-no-spreading
-const KeyCell = (props) => <td {...props} />;
+const KeyCell = (props: TdHTMLAttributes<HTMLTableCellElement>) => <td {...props} />;
 
 const Header = ({ title }: { title: string }) => (
   <Row className={styles['header']}>
@@ -51,7 +51,7 @@ function Settings({
 }: {
   onTunerRequested: (type: TunerType) => void,
   onKeyboardShortcutsDialogRequested: () => void,
-  askForCleanupChoices: () => Promise<void>,
+  askForCleanupChoices: () => Promise<unknown>,
   toggleStoreProjectInWorkingDir: () => Promise<void>,
   simpleMode: boolean,
   clearOutDir: () => Promise<void>,
@@ -129,7 +129,7 @@ function Settings({
             <KeyCell>
               {t('Show export options screen before exporting?')}
               <div style={detailsStyle}>
-                {t('This gives you an overview of the export and allows you to customise more parameters before exporting.')}
+                {t('This gives you an overview of the export and allows you to customise more parameters before exporting, like changing the output file name.')}
               </div>
             </KeyCell>
             <td>

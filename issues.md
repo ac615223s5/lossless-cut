@@ -10,8 +10,8 @@
   - I have limited time and I have a lot of projects to work on, so I cannot promise any timeline. I will usually prioritize the issues with the most likes, [see here for a list of the most popular issues](https://github.com/mifi/lossless-cut/issues/691).
 - How to *cut away* a middle part of a video?
   - Enable "advanced view" and then click the Yin Yang symbol. It will invert the segments.
-- Where is application data, settings and temp files stored?
-  - Electron's [appData](https://www.electronjs.org/docs/api/app#appgetpathname) folder: `%APPDATA%/LosslessCut` on Windows. `~/Library/Application Support/LosslessCut` on macOS. `$XDG_CONFIG_HOME/LosslessCut` or `~/.config/LosslessCut` on Linux. LosslessCut is **not** a [portable app.](https://github.com/mifi/lossless-cut/issues/645)
+- Is LosslessCut a portable app? Where is application data, settings and temp files stored?
+  - See LosslessCut is *not* a [portable app](https://github.com/mifi/lossless-cut/issues/645). See [Installation and files](./installation.md).
 - Can I export and replace the input file in-place?
   - No, but you can export and automatically delete the input file.
 - Can you publish through [winget](https://github.com/mifi/lossless-cut/issues/1279), [Flatpak](https://github.com/mifi/lossless-cut/pull/1813), [Docker](https://github.com/mifi/lossless-cut/issues/1086) or other software mangers?
@@ -39,7 +39,7 @@ Here is a great introduction to audio/video: [howvideo.works](https://howvideo.w
 
 If the video exports successfully without any error from LosslessCut, but it does not look as expected when playing back, please try this:
 
-- Try both `Keyframe cut` vs `Normal cut` (do not use `Smart Cut` if you have any problem)
+- Try both with *Keyframe cut mode* on and off (do not use `Smart Cut` if you have any problem).
 - Disable unnecessary tracks from the **Tracks panel**. First try to disable all tracks except the main track (e.g. video) and if that succeeds, then work your way by enabling more tracks and see which one is causing the problem. Sometimes LosslessCut (ffmpeg) is unable to cut certain tracks at all, and this could lead to a strange output (e.g. wrong output duration or black parts).
 - Select a different **output format** (`matroska` and `mov` support a lot of codecs.)
 - Try the same operation with a different file (same codec or different codec) and see whether it's a problem with just that one particular file.
@@ -49,7 +49,7 @@ If the video exports successfully without any error from LosslessCut, but it doe
 
 Each segment's *start cut time* normally (but not always) will be "rounded" to the nearest **previous** keyframe. This means that you often have to move the **start cut time** to **few frames after** the desired keyframe.
 - Lossless cutting is not an exact science. For some files, it just works. For others, you may need to trial and error to get the best cut. See [#330](https://github.com/mifi/lossless-cut/issues/330)
-- Your mileage may vary when it comes to `Keyframe cut` vs `Normal cut`. Most common video files need `Keyframe cut`, but you may need to try both. [ffmpeg](https://trac.ffmpeg.org/wiki/Seeking) also has documentation about these two seek/cut modes. In `ffmpeg`, `Keyframe cut` corresponds to `-ss` *before* `-i` and `Normal cut` is `-ss` *after* `-i`.
+- Your mileage may vary when it comes to *Keyframe cut mode*. Most common video files need *Keyframe cut* enabled, but you may need to try both values. [ffmpeg](https://trac.ffmpeg.org/wiki/Seeking) also has documentation about these two seek/cut modes. In `ffmpeg`, *Keyframe cut* corresponds to `-ss` *before* `-i`.
 - Try to change `avoid_negative_ts` (in export options).
 - Try also to set the **start**-cutpoint a few frames **before or after** the nearest keyframe (may also solve audio sync issues).
 - You may try to enable the new "Smart cut" mode to allow cutting between keyframes. However it is very experimental and may not work for many files.
@@ -79,11 +79,13 @@ This can happen when trying to merge files that are not compatible. Make sure th
   - If you're seeing incorrect output duration, sped up or slowed down segments, then changing format to TS is [known to give the files a common timebase](https://github.com/mifi/lossless-cut/issues/455), which sometimes makes it possible to merge them.
 3. Then merge the exported files.
 
-Doing this first might "clean up" certain parameters in the files, to make them more compatible for merging. If this doesn't work, you can also try to change `avoid_negative_ts` (in export options). Also try to disable most tracks (see above).
+Doing this first might "clean up" certain parameters in the files, to make them more compatible for merging. If this doesn't work, you can also try to change `avoid_negative_ts` (in export options). Also try to disable most tracks (see above). If this doesn't resolve the issue, then it probably means that you're hitting a bug or limitation in FFmpeg with the particular file that you're cutting/merging. Unfortunately there's not much to do other than trying different output settings, different cut time or waiting for improvements in FFmpeg.
 
 ## Smart cut not working
 
-Smart cut is experimental, so don't expect too much. But if you're having problems, check out [this issue](https://github.com/mifi/lossless-cut/issues/126). If Smart Cut gives you repeated (duplicate) segments, you can try to enable the Export Option "Shift all start times".
+Smart cut is experimental, so don't expect too much. But if you're having problems, check out [this issue](https://github.com/mifi/lossless-cut/issues/126).
+- If Smart cut gives you repeated (duplicate) segments, you can try to enable the Export Option "Shift all start times".
+- Sometimes it helps to convert (remux) your videos [to mp4 first](https://github.com/mifi/lossless-cut/discussions/1292#discussioncomment-10425084) (e.g. from mkv) using LosslessCut, before smart cutting them.
 
 ## My file changes from MP4 to MOV
 
@@ -104,18 +106,19 @@ If the output file name has special characters that get replaced by underscore (
 - Completely white window when starting up?
   - Try to run with `--disable-gpu` - See [781](https://github.com/mifi/lossless-cut/issues/781).
 - How to uninstall LosslessCut?
-  - There is no installer. Just delete the folder. Settings and temp files are stored in your [appData](https://www.electronjs.org/docs/api/app#appgetpathname) folder.
+  - There is no installer. Just delete the folder. [More info](./installation.md).
 - Preview of H265/HEVC files is completely black or corrupted?
   - Go to settings and disable "Hardware HEVC decoding".
 - Video preview playback slow or stuttering inside LosslessCut?
   - See [#922](https://github.com/mifi/lossless-cut/issues/922) [#1904](https://github.com/mifi/lossless-cut/issues/1904) [#1915](https://github.com/mifi/lossless-cut/issues/1915) [#922](https://github.com/mifi/lossless-cut/issues/922)
-- Where did the `.exe`/`.zip` downloads go?
-  - I decided to stop distributing exe and instead just 7zip, due to the [problems that the exe download was causing and the large size of zips.](https://github.com/mifi/lossless-cut/issues/1072#issuecomment-1066026323).
-- [APPX is not signed and **does not work**.](https://github.com/mifi/lossless-cut/issues/337) Please use [7z package](https://github.com/mifi/lossless-cut/releases/latest/download/LosslessCut-win-x64.7z) instead.
-- I'm getting a KERNEL32.dll error
-  - It's probably because you're running Windows 7, 8 or 8.1 which are [no longer supported.](https://github.com/mifi/lossless-cut/discussions/1476)
+- Why no `.exe`/`.zip`/`.appx` downloads?
+  - I decided to stop distributing exe/zip and instead just [7zip](https://github.com/mifi/lossless-cut/releases/latest/download/LosslessCut-win-x64.7z), due to the [problems](https://github.com/mifi/lossless-cut/issues/1072#issuecomment-1066026323) that the (self-extracting) exe was causing and the large size of `.zip` files. `appx` is unsigned and [**does not work**](https://github.com/mifi/lossless-cut/issues/337).
+- I'm getting a `KERNEL32.dll` error
+  - It's probably because you're running Windows 7, 8 or 8.1 which is [no longer supported.](https://github.com/mifi/lossless-cut/discussions/1476)
 
 # Known limitations
+
+- Undo/redo segments doesn't work through the top menu. This is a [known issue](https://github.com/mifi/lossless-cut/issues/610) that I don't know how to fix. Please use the keyboard shortcuts instead (<kbd>CTRL</kbd>/<kbd>CMD</kbd>+<kbd>Z</kbd> and <kbd>CTRL</kbd>+<kbd>Y</kbd> / <kbd>CMD</kbd>+<kbd>SHIFT</kbd>+<kbd>Z</kbd>).
 
 ## Low quality / blurry playback
 
