@@ -387,13 +387,25 @@ export async function confirmExtractAllStreamsDialog() {
   return !!value;
 }
 
-const CleanupChoices = ({ cleanupChoicesInitial, onChange: onChangeProp }) => {
+export interface CleanupChoicesType {
+  trashTmpFiles: boolean,
+  closeFile: boolean,
+  askForCleanup: boolean,
+  cleanupAfterExport?: boolean | undefined,
+  trashSourceFile?: boolean,
+  trashProjectFile?: boolean,
+  deleteIfTrashFails?: boolean,
+}
+export type CleanupChoice = keyof CleanupChoicesType;
+
+
+const CleanupChoices = ({ cleanupChoicesInitial, onChange: onChangeProp }: { cleanupChoicesInitial: CleanupChoicesType, onChange: (v: CleanupChoicesType) => void }) => {
   const [choices, setChoices] = useState(cleanupChoicesInitial);
 
-  const getVal = (key) => !!choices[key];
+  const getVal = (key: CleanupChoice) => !!choices[key];
 
-  const onChange = (key, val) => setChoices((oldChoices) => {
-    const newChoices = { ...oldChoices, [key]: val };
+  const onChange = (key: CleanupChoice, val: boolean | string) => setChoices((oldChoices) => {
+    const newChoices = { ...oldChoices, [key]: Boolean(val) };
     if ((newChoices.trashSourceFile || newChoices.trashTmpFiles) && !newChoices.closeFile) {
       newChoices.closeFile = true;
     }
@@ -430,10 +442,10 @@ const CleanupChoices = ({ cleanupChoicesInitial, onChange: onChangeProp }) => {
   );
 };
 
-export async function showCleanupFilesDialog(cleanupChoicesIn) {
+export async function showCleanupFilesDialog(cleanupChoicesIn: CleanupChoicesType) {
   let cleanupChoices = cleanupChoicesIn;
 
-  const { value } = await ReactSwal.fire({
+  const { value } = await ReactSwal.fire<string>({
     title: i18n.t('Cleanup files?'),
     html: <CleanupChoices cleanupChoicesInitial={cleanupChoices} onChange={(newChoices) => { cleanupChoices = newChoices; }} />,
     confirmButtonText: i18n.t('Confirm'),
@@ -566,7 +578,7 @@ export async function selectSegmentsByLabelDialog(currentName: string) {
 export async function selectSegmentsByExprDialog(inputValidator: (v: string) => Promise<string | undefined>) {
   const examples = {
     duration: { name: i18n.t('Segment duration less than 5 seconds'), code: 'segment.duration < 5' },
-    start: { name: i18n.t('Segment starts after 00:60'), code: 'segment.start > 60' },
+    start: { name: i18n.t('Segment starts after 01:00'), code: 'segment.start > 60' },
     label: { name: i18n.t('Segment label (exact)'), code: "segment.label === 'My label'" },
     regexp: { name: i18n.t('Segment label (regexp)'), code: '/^My label/.test(segment.label)' },
     tag: { name: i18n.t('Segment tag value'), code: "segment.tags.myTag === 'tag value'" },

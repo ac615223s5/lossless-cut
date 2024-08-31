@@ -5,16 +5,16 @@ import Timecode from 'smpte-timecode';
 import minBy from 'lodash/minBy';
 import invariant from 'tiny-invariant';
 
-import { pcmAudioCodecs, getMapStreamsArgs, isMov, LiteFFprobeStream } from './util/streams';
+import { pcmAudioCodecs, getMapStreamsArgs, isMov } from './util/streams';
 import { getSuffixedOutPath, isExecaError } from './util';
 import { isDurationValid } from './segments';
 import { FFprobeChapter, FFprobeFormat, FFprobeProbeResult, FFprobeStream } from '../../../ffprobe';
 import { parseSrt, parseSrtToSegments } from './edlFormats';
+import { CopyfileStreams, LiteFFprobeStream } from './types';
 
-const FileType = window.require('file-type');
 const { pathExists } = window.require('fs-extra');
 
-const { ffmpeg } = window.require('@electron/remote').require('./index.js');
+const { ffmpeg, fileTypePromise } = window.require('@electron/remote').require('./index.js');
 
 const { renderWaveformPng, mapTimesToSegments, detectSceneChanges, captureFrames, captureFrame, getFfCommandLine, runFfmpegConcat, runFfmpegWithProgress, html5ify, getDuration, abortFfmpegs, runFfmpeg, runFfprobe, getFfmpegPath, setCustomFfPath } = ffmpeg;
 
@@ -58,7 +58,7 @@ export function isCuttingEnd(cutTo: number, duration: number | undefined) {
   return cutTo < duration;
 }
 
-function getIntervalAroundTime(time, window) {
+function getIntervalAroundTime(time: number, window: number) {
   return {
     from: Math.max(time - window / 2, 0),
     to: time + window / 2,
@@ -222,7 +222,7 @@ export async function tryMapChaptersToEdl(chapters: FFprobeChapter[]) {
   }
 }
 
-export async function createChaptersFromSegments({ segmentPaths, chapterNames }: { segmentPaths: string[], chapterNames?: string[] }) {
+export async function createChaptersFromSegments({ segmentPaths, chapterNames }: { segmentPaths: string[], chapterNames?: (string | undefined)[] | undefined }) {
   if (!chapterNames) return undefined;
   try {
     const durations = await pMap(segmentPaths, (segmentPath) => getDuration(segmentPath), { concurrency: 3 });
@@ -261,24 +261,41 @@ function mapDefaultFormat({ streams, requestedFormat }: { streams: FFprobeStream
 
 async function determineOutputFormat(ffprobeFormatsStr: string | undefined, filePath: string) {
   const ffprobeFormats = (ffprobeFormatsStr || '').split(',').map((str) => str.trim()).filter(Boolean);
-  if (ffprobeFormats.length === 0) {
-    console.warn('ffprobe returned unknown formats', ffprobeFormatsStr);
+
+  const [firstFfprobeFormat] = ffprobeFormats;
+
+  if (firstFfprobeFormat == null) {
+    console.warn('FFprobe returned no formats', ffprobeFormatsStr);
     return undefined;
   }
 
-  const [firstFfprobeFormat] = ffprobeFormats;
-  if (ffprobeFormats.length === 1) return firstFfprobeFormat;
+  console.log('FFprobe detected format(s)', ffprobeFormatsStr);
 
-  // If ffprobe returned a list of formats, try to be a bit smarter about it.
-  // This should only be the case for matroska and mov. See `ffmpeg -formats`
-  if (firstFfprobeFormat == null || !['matroska', 'mov'].includes(firstFfprobeFormat)) {
+  // We need to test mp3 first because ffprobe seems to report the wrong format sometimes https://github.com/mifi/lossless-cut/issues/2129
+  if (firstFfprobeFormat === 'mp3') {
+    // file-type detects it correctly
+    const fileTypeResponse = await (await fileTypePromise).fileTypeFromFile(filePath);
+    if (fileTypeResponse?.mime === 'audio/mpeg') {
+      return 'mp2';
+    }
+  }
+
+  if (ffprobeFormats.length === 1) {
+    return firstFfprobeFormat;
+  }
+
+  // If ffprobe returned a list of formats, use `file-type` to try to detect more accurately.
+  // This should only be the case for matroska (matroska,webm) and mov (mov,mp4,m4a,3gp,3g2,mj2),
+  // so if it's another format, then just return the first format from the list.
+  // See also `ffmpeg -formats`
+  if (!['matroska', 'mov'].includes(firstFfprobeFormat)) {
     console.warn('Unknown ffprobe format list', ffprobeFormats);
     return firstFfprobeFormat;
   }
 
-  const fileTypeResponse = await FileType.fromFile(filePath);
+  const fileTypeResponse = await (await fileTypePromise).fileTypeFromFile(filePath);
   if (fileTypeResponse == null) {
-    console.warn('file-type failed to detect format, defaulting to first', ffprobeFormats);
+    console.warn('file-type failed to detect format, defaulting to first FFprobe detected format', ffprobeFormats);
     return firstFfprobeFormat;
   }
 
@@ -328,9 +345,8 @@ async function determineOutputFormat(ffprobeFormatsStr: string | undefined, file
   }
 }
 
-export async function getSmarterOutFormat({ filePath, fileMeta: { format, streams } }: { filePath: string, fileMeta: { format: FFprobeFormat, streams: FFprobeStream[] } }) {
-  const formatsStr = format.format_name;
-  const assumedFormat = await determineOutputFormat(formatsStr, filePath);
+export async function getDefaultOutFormat({ filePath, fileMeta: { format, streams } }: { filePath: string, fileMeta: { format: Pick<FFprobeFormat, 'format_name'>, streams: FFprobeStream[] } }) {
+  const assumedFormat = await determineOutputFormat(format.format_name, filePath);
 
   return mapDefaultFormat({ streams, requestedFormat: assumedFormat });
 }
@@ -428,7 +444,7 @@ async function extractNonAttachmentStreams({ customOutDir, filePath, streams, en
     ...streamArgs,
   ];
 
-  const { stdout } = await runFfmpeg(ffmpegArgs);
+  const { stdout } = await runFfmpeg(ffmpegArgs, undefined, { logCli: true });
   console.log(stdout.toString('utf8'));
 
   return outPaths;
@@ -464,7 +480,7 @@ async function extractAttachmentStreams({ customOutDir, filePath, streams, enabl
   ];
 
   try {
-    const { stdout } = await runFfmpeg(ffmpegArgs);
+    const { stdout } = await runFfmpeg(ffmpegArgs, undefined, { logCli: true });
     console.log(stdout.toString('utf8'));
   } catch (err) {
     // Unfortunately ffmpeg will exit with code 1 even though it's a success
@@ -684,7 +700,7 @@ export const getVideoTimescaleArgs = (videoTimebase: number | undefined) => (vid
 
 // inspired by https://gist.github.com/fernandoherreradelasheras/5eca67f4200f1a7cc8281747da08496e
 export async function cutEncodeSmartPart({ filePath, cutFrom, cutTo, outPath, outFormat, videoCodec, videoBitrate, videoTimebase, allFilesMeta, copyFileStreams, videoStreamIndex, ffmpegExperimental }: {
-  filePath: string, cutFrom: number, cutTo: number, outPath: string, outFormat: string, videoCodec: string, videoBitrate: number, videoTimebase: number, allFilesMeta, copyFileStreams, videoStreamIndex: number, ffmpegExperimental: boolean,
+  filePath: string, cutFrom: number, cutTo: number, outPath: string, outFormat: string, videoCodec: string, videoBitrate: number, videoTimebase: number, allFilesMeta, copyFileStreams: CopyfileStreams, videoStreamIndex: number, ffmpegExperimental: boolean,
 }) {
   function getVideoArgs({ streamIndex, outputIndex }: { streamIndex: number, outputIndex: number }) {
     if (streamIndex !== videoStreamIndex) return undefined;

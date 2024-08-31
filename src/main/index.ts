@@ -5,7 +5,7 @@ process.traceProcessWarnings = true;
 // eslint-disable-next-line import/no-extraneous-dependencies
 import electron, { AboutPanelOptionsOptions, BrowserWindow, BrowserWindowConstructorOptions, nativeTheme, shell, app, ipcMain, Notification, NotificationConstructorOptions } from 'electron';
 import i18n from 'i18next';
-import debounce from 'lodash/debounce';
+import debounce from 'lodash.debounce';
 import yargsParser from 'yargs-parser';
 import JSON5 from 'json5';
 import remote from '@electron/remote/main';
@@ -44,6 +44,7 @@ export { downloadMediaUrl } from './ffmpeg.js';
 
 
 const electronUnhandled = import('electron-unhandled');
+export const fileTypePromise = import('file-type/node');
 
 // eslint-disable-next-line unicorn/prefer-top-level-await
 (async () => {
