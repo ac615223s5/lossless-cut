@@ -10,6 +10,8 @@ import isDev from './isDev';
 import Swal, { errorToast, toast } from './swal';
 import { ffmpegExtractWindow } from './util/constants';
 import { appName } from '../../main/common';
+import { DirectoryAccessDeclinedError, UnsupportedFileError } from '../errors';
+import { Html5ifyMode } from '../../../types';
 
 const { dirname, parse: parsePath, join, extname, isAbsolute, resolve, basename } = window.require('path');
 const fsExtra = window.require('fs-extra');
@@ -159,41 +161,19 @@ export async function transferTimestamps({ inPath, outPath, cutFrom = 0, cutTo =
   }
 }
 
-export function handleError(arg1: unknown, arg2?: unknown) {
-  console.error('handleError', arg1, arg2);
-
-  let err: Error | undefined;
-  let str: string | undefined;
-
-  if (typeof arg1 === 'string') str = arg1;
-  else if (typeof arg2 === 'string') str = arg2;
-
-  if (arg1 instanceof Error) err = arg1;
-  else if (arg2 instanceof Error) err = arg2;
-
-  if (err != null && 'code' in err && err.code === 'LLC_FFPROBE_UNSUPPORTED_FILE') {
-    errorToast(i18n.t('Unsupported file'));
-  } else {
-    Swal.fire({
-      icon: 'error',
-      title: str || i18n.t('An error has occurred.'),
-      text: err?.message ? err?.message.slice(0, 300) : undefined,
-    });
-  }
-}
-
 export function filenamify(name: string) {
   return name.replaceAll(/[^\w.-]/g, '_');
 }
 
-export function withBlur(cb) {
-  return (e) => {
+// eslint-disable-next-line space-before-function-paren
+export function withBlur<T extends { target?: { blur?: () => unknown } | object }>(cb: (a: T) => void) {
+  return (e: T) => {
     cb(e);
-    e.target?.blur();
+    if (e.target && 'blur' in e.target) e.target?.blur?.();
   };
 }
 
-export function dragPreventer(ev) {
+export function dragPreventer(ev: DragEvent) {
   ev.preventDefault();
 }
 
@@ -216,20 +196,20 @@ export function getOutFileExtension({ isCustomFormatSelected, outFormat, filePat
   isCustomFormatSelected?: boolean, outFormat: string, filePath: string,
 }) {
   if (!isCustomFormatSelected) {
-    const ext = extname(filePath);
+    const inputExt = extname(filePath);
     // QuickTime is quirky about the file extension of mov files (has to be .mov)
     // https://github.com/mifi/lossless-cut/issues/1075#issuecomment-1072084286
-    const hasMovIncorrectExtension = outFormat === 'mov' && ext.toLowerCase() !== '.mov';
+    const hasMovIncorrectExtension = outFormat === 'mov' && inputExt.toLowerCase() !== '.mov';
 
-    // OK, just keep the current extension. Because most players will not care about the extension
-    if (!hasMovIncorrectExtension) return extname(filePath);
+    // OK, just keep the current extension. Because most other players will not care about the extension
+    if (!hasMovIncorrectExtension) return inputExt;
   }
 
   // user is changing format, must update extension too
   return `.${getExtensionForFormat(outFormat)}`;
 }
 
-export const hasDuplicates = (arr) => new Set(arr).size !== arr.length;
+export const hasDuplicates = (arr: unknown[]) => new Set(arr).size !== arr.length;
 
 // Need to resolve relative paths from the command line https://github.com/mifi/lossless-cut/issues/639
 export const resolvePathIfNeeded = (inPath: string) => (isAbsolute(inPath) ? inPath : resolve(inPath));
@@ -237,7 +217,7 @@ export const resolvePathIfNeeded = (inPath: string) => (isAbsolute(inPath) ? inP
 export const html5ifiedPrefix = 'html5ified-';
 export const html5dummySuffix = 'dummy';
 
-export async function findExistingHtml5FriendlyFile(fp, cod) {
+export async function findExistingHtml5FriendlyFile(fp: string, cod: string | undefined) {
   // The order is the priority we will search:
   const suffixes = ['slowest', 'slow-audio', 'slow', 'fast-audio-remux', 'fast-audio', 'fast', html5dummySuffix];
   const prefix = getSuffixedFileName(fp, html5ifiedPrefix);
@@ -270,7 +250,7 @@ export async function findExistingHtml5FriendlyFile(fp, cod) {
   };
 }
 
-export function getHtml5ifiedPath(cod: string | undefined, fp, type) {
+export function getHtml5ifiedPath(cod: string | undefined, fp: string, type: Html5ifyMode) {
   // See also inside ffmpegHtml5ify
   const ext = (isMac && ['slowest', 'slow', 'slow-audio'].includes(type)) ? 'mp4' : 'mkv';
   return getSuffixedOutPath({ customOutDir: cod, filePath: fp, nameSuffix: `${html5ifiedPrefix}${type}.${ext}` });
@@ -318,6 +298,9 @@ export function isExecaError(err: unknown): err is InvariantExecaError {
   return err instanceof Error && 'stdout' in err && 'stderr' in err;
 }
 
+// execa killed (aborted by user)
+export const isAbortedError = (err: unknown) => isExecaError(err) && err.killed;
+
 export const getStdioString = (stdio: string | Buffer | undefined) => (stdio instanceof Buffer ? stdio.toString('utf8') : stdio);
 
 // A bit hacky but it works, unless someone has a file called "No space left on device" ( ͡° ͜ʖ ͡°)
@@ -331,6 +314,55 @@ export const isMuxNotSupported = (err: InvariantExecaError) => (
   && err.stderr != null
   && /Could not write header .*incorrect codec parameters .*Invalid argument/.test(getStdioString(err.stderr) ?? '')
 );
+
+export function handleError(arg1: unknown, arg2?: unknown) {
+  console.error('handleError', arg1, arg2);
+
+  let err: Error | undefined;
+  let str: string | undefined;
+
+  if (typeof arg1 === 'string') str = arg1;
+  else if (typeof arg2 === 'string') str = arg2;
+
+  if (arg1 instanceof Error) err = arg1;
+  else if (arg2 instanceof Error) err = arg2;
+
+  if (err instanceof UnsupportedFileError) {
+    errorToast(i18n.t('Unsupported file'));
+  } else {
+    Swal.fire({
+      icon: 'error',
+      title: str || i18n.t('An error has occurred.'),
+      text: err?.message ? err?.message.slice(0, 300) : undefined,
+    });
+  }
+}
+
+/**
+ * Run an operation with error handling
+ */
+export async function withErrorHandling(operation: () => Promise<void>, errorMsgOrFn?: string | ((err: unknown) => string)) {
+  try {
+    await operation();
+  } catch (err) {
+    if (err instanceof DirectoryAccessDeclinedError || isAbortedError(err)) return;
+
+    if (err instanceof UnsupportedFileError) {
+      errorToast(i18n.t('Unsupported file'));
+      return;
+    }
+
+    let errorMsg: string | undefined;
+    if (typeof errorMsgOrFn === 'string') errorMsg = errorMsgOrFn;
+    if (typeof errorMsgOrFn === 'function') errorMsg = errorMsgOrFn(err);
+    if (errorMsg != null) {
+      console.error(errorMsg, err);
+      errorToast(errorMsg);
+    } else {
+      handleError(err);
+    }
+  }
+}
 
 export async function checkAppPath() {
   try {
@@ -361,10 +393,10 @@ export async function checkAppPath() {
 }
 
 // https://stackoverflow.com/a/2450976/6519037
-export function shuffleArray(arrayIn) {
+export function shuffleArray<T>(arrayIn: T[]) {
   const array = [...arrayIn];
   let currentIndex = array.length;
-  let randomIndex;
+  let randomIndex: number;
 
   // While there remain elements to shuffle...
   while (currentIndex !== 0) {
@@ -374,23 +406,24 @@ export function shuffleArray(arrayIn) {
 
     // And swap it with the current element.
     [array[currentIndex], array[randomIndex]] = [
-      array[randomIndex], array[currentIndex]];
+      array[randomIndex]!, array[currentIndex]!,
+    ] as const;
   }
 
   return array;
 }
 
 // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_Expressions#escaping
-export function escapeRegExp(string) {
+export function escapeRegExp(str: string) {
   // eslint-disable-next-line unicorn/better-regex
-  return string.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
+  return str.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
 }
 
-export const readFileSize = async (path) => (await stat(path)).size;
+export const readFileSize = async (path: string) => (await stat(path)).size;
 
-export const readFileSizes = (paths) => pMap(paths, async (path) => readFileSize(path), { concurrency: 5 });
+export const readFileSizes = (paths: string[]) => pMap(paths, async (path) => readFileSize(path), { concurrency: 5 });
 
-export function checkFileSizes(inputSize, outputSize) {
+export function checkFileSizes(inputSize: number, outputSize: number) {
   const diff = Math.abs(outputSize - inputSize);
   const relDiff = diff / inputSize;
   const maxDiffPercent = 5;
@@ -400,11 +433,14 @@ export function checkFileSizes(inputSize, outputSize) {
   return undefined;
 }
 
-export function setDocumentTitle({ filePath, working, cutProgress }: { filePath?: string | undefined, working?: string | undefined, cutProgress?: number | undefined }) {
+export function setDocumentTitle({ filePath, working, progress }: {
+  filePath?: string | undefined,
+  working?: string | undefined,
+  progress?: number | undefined }) {
   const parts: string[] = [];
 
   if (working) {
-    if (cutProgress != null) parts.push(`${(cutProgress * 100).toFixed(1)}%`);
+    if (progress != null) parts.push(`${(progress * 100).toFixed(1)}%`);
     parts.push(working);
   }
 

@@ -11,6 +11,7 @@ import { platform, arch, isWindows, isMac, isLinux } from './util.js';
 import { CaptureFormat, Html5ifyMode, Waveform } from '../../types.js';
 import isDev from './isDev.js';
 import logger from './logger.js';
+import { parseFfmpegProgressLine } from './progress.js';
 
 
 const runningFfmpegs = new Set<ExecaChildProcess<Buffer>>();
@@ -23,8 +24,16 @@ export function setCustomFfPath(path: string | undefined) {
   customFfPath = path;
 }
 
+function escapeCliArg(arg: string) {
+  if (isWindows) {
+    // https://github.com/mifi/lossless-cut/issues/2151
+    return /[\s"&<>^|]/.test(arg) ? `"${arg.replaceAll('"', '""')}"` : arg;
+  }
+  return /[^\w-]/.test(arg) ? `'${arg.replaceAll("'", '\'"\'"\'')}'` : arg;
+}
+
 export function getFfCommandLine(cmd: string, args: readonly string[]) {
-  return `${cmd} ${args.map((arg) => (/[^\w-]/.test(arg) ? `'${arg}'` : arg)).join(' ')}`;
+  return `${cmd} ${args.map((arg) => escapeCliArg(arg)).join(' ')}`;
 }
 
 function getFfPath(cmd: string) {
@@ -53,7 +62,12 @@ export function abortFfmpegs() {
   });
 }
 
-function handleProgress(process: { stderr: Readable | null }, durationIn: number | undefined, onProgress: (a: number) => void, customMatcher: (a: string) => void = () => undefined) {
+function handleProgress(
+  process: { stderr: Readable | null },
+  duration: number | undefined,
+  onProgress: (a: number) => void,
+  customMatcher?: (a: string) => void,
+) {
   if (!onProgress) return;
   if (process.stderr == null) return;
   onProgress(0);
@@ -63,47 +77,12 @@ function handleProgress(process: { stderr: Readable | null }, durationIn: number
     // console.log('progress', line);
 
     try {
-      // eslint-disable-next-line unicorn/better-regex
-      let match = line.match(/frame=\s*[^\s]+\s+fps=\s*[^\s]+\s+q=\s*[^\s]+\s+(?:size|Lsize)=\s*[^\s]+\s+time=\s*([^\s]+)\s+/);
-      // Audio only looks like this: "line size=  233422kB time=01:45:50.68 bitrate= 301.1kbits/s speed= 353x    "
-      // eslint-disable-next-line unicorn/better-regex
-      if (!match) match = line.match(/(?:size|Lsize)=\s*[^\s]+\s+time=\s*([^\s]+)\s+/);
-      if (!match) {
-        customMatcher(line);
-        return;
+      const progress = parseFfmpegProgressLine({ line, customMatcher, duration });
+      if (progress != null) {
+        onProgress(progress);
       }
-
-      const timeStr = match[1];
-      // console.log(timeStr);
-      const match2 = timeStr!.match(/^(-?)(\d+):(\d+):(\d+)\.(\d+)$/);
-      if (!match2) throw new Error(`Invalid time from ffmpeg progress ${timeStr}`);
-
-      const sign = match2[1];
-
-      if (sign === '-') {
-        // For some reason, ffmpeg sometimes gives a negative progress, e.g. "-00:00:06.46"
-        // let's just ignore that
-        return;
-      }
-
-      const h = parseInt(match2[2]!, 10);
-      const m = parseInt(match2[3]!, 10);
-      const s = parseInt(match2[4]!, 10);
-      const cs = parseInt(match2[5]!, 10);
-      const time = (((h * 60) + m) * 60 + s) + cs / 100;
-      // console.log(time);
-
-      const progressTime = Math.max(0, time);
-      // console.log(progressTime);
-
-      if (durationIn == null) return;
-      const duration = Math.max(0, durationIn);
-      if (duration === 0) return;
-      const progress = duration ? Math.min(progressTime / duration, 1) : 0; // sometimes progressTime will be greater than cutDuration
-      onProgress(progress);
     } catch (err) {
-      // @ts-expect-error todo
-      logger.error('Failed to parse ffmpeg progress line:', err.message);
+      logger.error('Failed to parse ffmpeg progress line:', err instanceof Error ? err.message : err);
     }
   });
 }
@@ -154,7 +133,9 @@ export async function runFfmpegConcat({ ffmpegArgs, concatTxt, totalDuration, on
 }
 
 export async function runFfmpegWithProgress({ ffmpegArgs, duration, onProgress }: {
-  ffmpegArgs: string[], duration: number | undefined, onProgress: (a: number) => void,
+  ffmpegArgs: string[],
+  duration?: number | undefined,
+  onProgress: (a: number) => void,
 }) {
   const process = runFfmpegProcess(ffmpegArgs);
   assert(process.stderr != null);
@@ -425,7 +406,15 @@ function getCodecOpts(captureFormat: CaptureFormat) {
 }
 
 export async function captureFrames({ from, to, videoPath, outPathTemplate, quality, filter, framePts, onProgress, captureFormat }: {
-  from: number, to: number, videoPath: string, outPathTemplate: string, quality: number, filter?: string | undefined, framePts?: boolean | undefined, onProgress: (p: number) => void, captureFormat: CaptureFormat,
+  from: number,
+  to: number,
+  videoPath: string,
+  outPathTemplate: string,
+  quality: number,
+  filter?: string | undefined,
+  framePts?: boolean | undefined,
+  onProgress: (p: number) => void,
+  captureFormat: CaptureFormat,
 }) {
   const args = [
     '-ss', String(from),

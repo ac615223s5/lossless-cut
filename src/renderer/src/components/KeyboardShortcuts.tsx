@@ -12,7 +12,7 @@ import Swal from '../swal';
 import SetCutpointButton from './SetCutpointButton';
 import SegmentCutpointButton from './SegmentCutpointButton';
 import { getModifier } from '../hooks/useTimelineScroll';
-import { KeyBinding, KeyboardAction } from '../../../../types';
+import { KeyBinding, KeyboardAction, ModifierKey } from '../../../../types';
 import { StateSegment } from '../types';
 import Sheet from './Sheet';
 
@@ -49,7 +49,10 @@ function fixKeys(keys: string[]) {
 const CreateBinding = memo(({
   actionsMap, action, setCreatingBinding, onNewKeyBindingConfirmed,
 }: {
-  actionsMap: ActionsMap, action: KeyboardAction | undefined, setCreatingBinding: Dispatch<SetStateAction<KeyboardAction | undefined>>, onNewKeyBindingConfirmed: (a: KeyboardAction, keys: string[]) => void,
+  actionsMap: ActionsMap,
+  action: KeyboardAction | undefined,
+  setCreatingBinding: Dispatch<SetStateAction<KeyboardAction | undefined>>,
+  onNewKeyBindingConfirmed: (a: KeyboardAction, keys: string[]) => void,
 }) => {
   const { t } = useTranslation();
 
@@ -119,6 +122,18 @@ const CreateBinding = memo(({
 
 const rowStyle = { display: 'flex', alignItems: 'center', borderBottom: '1px solid rgba(0,0,0,0.1)', paddingBottom: '.2em' };
 
+function WheelModifier({ text, wheelText, modifier }: { text: string, wheelText: string, modifier: ModifierKey }) {
+  return (
+    <div style={{ ...rowStyle, alignItems: 'center' }}>
+      <span>{text}</span>
+      <div style={{ flexGrow: 1 }} />
+      {getModifier(modifier).map((v) => <kbd key={v} style={{ marginRight: '.7em' }}>{v}</kbd>)}
+      <FaMouse style={{ marginRight: '.3em' }} />
+      <span>{wheelText}</span>
+    </div>
+  );
+}
+
 // eslint-disable-next-line react/display-name
 const KeyboardShortcuts = memo(({
   keyBindings, setKeyBindings, resetKeyBindings, currentCutSeg,
@@ -127,7 +142,7 @@ const KeyboardShortcuts = memo(({
 }) => {
   const { t } = useTranslation();
 
-  const { mouseWheelZoomModifierKey } = useUserSettings();
+  const { mouseWheelZoomModifierKey, mouseWheelFrameSeekModifierKey, mouseWheelKeyframeSeekModifierKey } = useUserSettings();
 
   const { actionsMap, extraLinesPerCategory } = useMemo(() => {
     const playbackCategory = t('Playback');
@@ -631,19 +646,17 @@ const KeyboardShortcuts = memo(({
     const extraLinesPerCategory: Record<Category, ReactNode> = {
       [zoomOperationsCategory]: [
         <div key="1" style={{ ...rowStyle, alignItems: 'center' }}>
-          <span>{t('Zoom in/out timeline')}</span>
+          <span>{t('Pan timeline')}</span>
           <div style={{ flexGrow: 1 }} />
           <FaMouse style={{ marginRight: '.3em' }} />
           <span>{t('Mouse scroll/wheel up/down')}</span>
         </div>,
 
-        <div key="2" style={{ ...rowStyle, alignItems: 'center' }}>
-          <span>{t('Pan timeline')}</span>
-          <div style={{ flexGrow: 1 }} />
-          {getModifier(mouseWheelZoomModifierKey).map((v) => <kbd key={v} style={{ marginRight: '.7em' }}>{v}</kbd>)}
-          <FaMouse style={{ marginRight: '.3em' }} />
-          <span>{t('Mouse scroll/wheel up/down')}</span>
-        </div>,
+        <WheelModifier key="2" text={t('Seek one frame')} wheelText={t('Mouse scroll/wheel up/down')} modifier={mouseWheelFrameSeekModifierKey} />,
+
+        <WheelModifier key="3" text={t('Seek one key frame')} wheelText={t('Mouse scroll/wheel up/down')} modifier={mouseWheelKeyframeSeekModifierKey} />,
+
+        <WheelModifier key="4" text={t('Zoom in/out timeline')} wheelText={t('Mouse scroll/wheel up/down')} modifier={mouseWheelZoomModifierKey} />,
       ],
     };
 
@@ -651,7 +664,7 @@ const KeyboardShortcuts = memo(({
       extraLinesPerCategory,
       actionsMap,
     };
-  }, [currentCutSeg, mouseWheelZoomModifierKey, t]);
+  }, [currentCutSeg, mouseWheelFrameSeekModifierKey, mouseWheelKeyframeSeekModifierKey, mouseWheelZoomModifierKey, t]);
 
   useEffect(() => {
     // cleanup invalid bindings, to prevent renamed actions from blocking user to rebind
@@ -707,25 +720,37 @@ const KeyboardShortcuts = memo(({
 
   const stringifyKeys = (keys: string[]) => keys.join('+');
 
-  const onNewKeyBindingConfirmed = useCallback((action: KeyboardAction, keys: string[]) => {
+  const onNewKeyBindingConfirmed = useCallback(async (action: KeyboardAction, keys: string[]) => {
     const fixedKeys = fixKeys(keys);
     if (fixedKeys.length === 0) return;
     const keysStr = stringifyKeys(fixedKeys);
     console.log('new key binding', action, keysStr);
 
-    setKeyBindings((existingBindings) => {
-      const duplicate = existingBindings.find((existingBinding) => existingBinding.keys === keysStr);
-      if (duplicate) {
-        Swal.fire({ icon: 'error', title: t('Duplicate keyboard combination'), text: t('Combination is already bound to "{{alreadyBoundKey}}"', { alreadyBoundKey: actionsMap[duplicate.action]?.name }) });
-        console.log('trying to add duplicate');
-        return existingBindings;
+    const duplicate = keyBindings.find((existingBinding) => existingBinding.keys === keysStr);
+    let shouldReplaceDuplicate: KeyBinding | undefined;
+    if (duplicate) {
+      const { isConfirmed } = await Swal.fire({
+        icon: 'warning',
+        title: t('Duplicate keyboard combination'),
+        text: t('Combination is already bound to "{{alreadyBoundKey}}". Do you want to replace the existing binding?', { alreadyBoundKey: actionsMap[duplicate.action]?.name }),
+        confirmButtonText: t('Replace'),
+        focusCancel: true,
+        showCancelButton: true,
+      });
+      if (isConfirmed) {
+        shouldReplaceDuplicate = duplicate;
+      } else {
+        return;
       }
+    }
 
-      console.log('saving key binding');
+    setKeyBindings((existingBindings) => {
+      console.log('Saving key binding');
       setCreatingBinding(undefined);
-      return [...existingBindings, { action, keys: keysStr }];
+      const filtered = !shouldReplaceDuplicate ? existingBindings : existingBindings.filter((existing) => existing.keys !== shouldReplaceDuplicate.keys);
+      return [...filtered, { action, keys: keysStr }];
     });
-  }, [actionsMap, setKeyBindings, t]);
+  }, [actionsMap, keyBindings, setKeyBindings, t]);
 
   return (
     <>

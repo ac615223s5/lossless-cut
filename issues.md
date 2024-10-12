@@ -1,6 +1,6 @@
 # FAQ
 
-- **Can LosslessCut crop, resize, stretch, mirror, overlay text/images, watermark, blur, redact, re-encode, create GIF, slideshow, burn subtitles, color grading, fade/transition between video clips, fade/combine/mix/merge audio tracks or change audio volume?**
+- **Can LosslessCut crop, resize, stretch, mirror/flip, overlay text/images, watermark, blur, redact, re-encode, create GIF, slideshow, burn subtitles, color grading, fade/transition between video clips, fade/combine/mix/merge audio tracks or change audio volume?**
   - No, these are all lossy operations (meaning you *have* to re-encode the file), but in the future I may start to implement such features. [See this issue for more information.](https://github.com/mifi/lossless-cut/issues/372). See also [#643](https://github.com/mifi/lossless-cut/issues/643).
 - Can LosslessCut be batched/automated using a CLI or API?
   - While it was never designed for advanced batching/automation, it does have a [basic CLI and a HTTP API](./cli.md), and there are a few feature requests regarding this: [#980](https://github.com/mifi/lossless-cut/issues/980) [#868](https://github.com/mifi/lossless-cut/issues/868).
@@ -87,11 +87,11 @@ Smart cut is experimental, so don't expect too much. But if you're having proble
 - If Smart cut gives you repeated (duplicate) segments, you can try to enable the Export Option "Shift all start times".
 - Sometimes it helps to convert (remux) your videos [to mp4 first](https://github.com/mifi/lossless-cut/discussions/1292#discussioncomment-10425084) (e.g. from mkv) using LosslessCut, before smart cutting them.
 
-## My file changes from MP4 to MOV
+## MP4/MOV issues
 
-Some MP4 files ffmpeg is not able to export as MP4 and therefore needs to use MOV instead. Unfortunately I don't know any way to fix this.
+Some MP4 files FFmpeg is not able to export as MP4 and MOV needs to be selected instead. Unfortunately I don't know any way to fix this. Sometimes certain players are not able to play back certain exported `.mov` files ([Adobe Premiere](https://github.com/mifi/lossless-cut/issues/1075#issuecomment-2327459890) 👀). You can try to rename the exported MOV file extension to `.mp4` and see if it helps. Or vice versa, rename an exported MP4 file to `.mov`.
 
-## Output file name is missing characters
+## Output file name is missing characters (Chinese, accents etc)
 
 If the output file name has special characters that get replaced by underscore (`_`), try to turn off ["Sanitize"](https://github.com/mifi/lossless-cut/issues/889) in the "Output file names" editor in the "Export options" dialog. Note that this will cause special characters like `/` to be preserved. Some characters are not supported in some operating systems, so be careful. using `/` or `\` can be used to create a folder structure from your segments when exported.
 
@@ -109,8 +109,8 @@ If the output file name has special characters that get replaced by underscore (
   - There is no installer. Just delete the folder. [More info](./installation.md).
 - Preview of H265/HEVC files is completely black or corrupted?
   - Go to settings and disable "Hardware HEVC decoding".
-- Video preview playback slow or stuttering inside LosslessCut?
-  - See [#922](https://github.com/mifi/lossless-cut/issues/922) [#1904](https://github.com/mifi/lossless-cut/issues/1904) [#1915](https://github.com/mifi/lossless-cut/issues/1915) [#922](https://github.com/mifi/lossless-cut/issues/922)
+- Video preview playback slow, stuttering, flickering inside LosslessCut (NVIDIA)
+  - See [#922](https://github.com/mifi/lossless-cut/issues/922) [#1904](https://github.com/mifi/lossless-cut/issues/1904) [#1915](https://github.com/mifi/lossless-cut/issues/1915) [#922](https://github.com/mifi/lossless-cut/issues/922) [#2083](https://github.com/mifi/lossless-cut/issues/2083)
 - Why no `.exe`/`.zip`/`.appx` downloads?
   - I decided to stop distributing exe/zip and instead just [7zip](https://github.com/mifi/lossless-cut/releases/latest/download/LosslessCut-win-x64.7z), due to the [problems](https://github.com/mifi/lossless-cut/issues/1072#issuecomment-1066026323) that the (self-extracting) exe was causing and the large size of `.zip` files. `appx` is unsigned and [**does not work**](https://github.com/mifi/lossless-cut/issues/337).
 - I'm getting a `KERNEL32.dll` error

@@ -42,6 +42,11 @@ export type TimecodeFormat = 'timecodeWithDecimalFraction' | 'frameCount' | 'tim
 
 export type AvoidNegativeTs = 'make_zero' | 'auto' | 'make_non_negative' | 'disabled';
 
+export type ModifierKey = 'ctrl' | 'shift' | 'alt' | 'meta';
+
+export type PreserveMetadata = 'default' | 'nonglobal' | 'none'
+
+
 export interface Config {
   captureFormat: CaptureFormat,
   customOutDir: string | undefined,
@@ -62,6 +67,9 @@ export interface Config {
   wheelSensitivity: number,
   language: LanguageKey | undefined,
   ffmpegExperimental: boolean,
+  preserveChapters: boolean,
+  preserveMetadata: PreserveMetadata,
+  preserveMetadataOnMerge: boolean,
   preserveMovData: boolean,
   movFastStart: boolean,
   avoidNegativeTs: AvoidNegativeTs,
@@ -69,7 +77,6 @@ export interface Config {
   hideOsNotifications: 'all' | undefined,
   autoLoadTimecode: boolean,
   segmentsToChapters: boolean,
-  preserveMetadataOnMerge: boolean,
   simpleMode: boolean,
   outSegTemplate: string | undefined,
   mergedFileTemplate: string | undefined,
@@ -87,7 +94,9 @@ export interface Config {
   customFfPath: string | undefined,
   storeProjectInWorkingDir: boolean,
   enableOverwriteOutput: boolean,
-  mouseWheelZoomModifierKey: string,
+  mouseWheelZoomModifierKey: ModifierKey,
+  mouseWheelFrameSeekModifierKey: ModifierKey,
+  mouseWheelKeyframeSeekModifierKey: ModifierKey,
   captureFrameMethod: 'videotag' | 'ffmpeg',
   captureFrameQuality: number,
   captureFrameFileNameFormat: 'timestamp' | 'index',

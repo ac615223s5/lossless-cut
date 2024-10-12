@@ -3,7 +3,7 @@ process.traceProcessWarnings = true;
 
 /* eslint-disable import/first */
 // eslint-disable-next-line import/no-extraneous-dependencies
-import electron, { AboutPanelOptionsOptions, BrowserWindow, BrowserWindowConstructorOptions, nativeTheme, shell, app, ipcMain, Notification, NotificationConstructorOptions } from 'electron';
+import electron, { BrowserWindow, BrowserWindowConstructorOptions, nativeTheme, shell, app, ipcMain, Notification, NotificationConstructorOptions } from 'electron';
 import i18n from 'i18next';
 import debounce from 'lodash.debounce';
 import yargsParser from 'yargs-parser';
@@ -11,15 +11,18 @@ import JSON5 from 'json5';
 import remote from '@electron/remote/main';
 import { stat } from 'node:fs/promises';
 import assert from 'node:assert';
+import timers from 'node:timers/promises';
 
 import logger from './logger.js';
 import menu from './menu.js';
 import * as configStore from './configStore.js';
-import { isLinux } from './util.js';
-import { appName, copyrightYear } from './common.js';
+import { isWindows } from './util.js';
+import { appName } from './common.js';
 import attachContextMenu from './contextMenu.js';
 import HttpServer from './httpServer.js';
 import isDev from './isDev.js';
+import isStoreBuild from './isStoreBuild.js';
+import { getAboutPanelOptions } from './aboutPanel.js';
 
 import { checkNewVersion } from './updateChecker.js';
 
@@ -66,32 +69,17 @@ app.commandLine.appendSwitch('enable-blink-features', 'AudioVideoTracks');
 remote.initialize();
 
 
-const appVersion = app.getVersion();
-
 app.name = appName;
 
-const isStoreBuild = process.windowsStore || process.mas;
-
-const showVersion = !isStoreBuild;
-
-const aboutPanelOptions: AboutPanelOptionsOptions = {
-  applicationName: appName,
-  copyright: `Copyright © ${copyrightYear} Mikael Finstad ❤️ 🇳🇴`,
-  version: '', // not very useful (MacOS only, and same as applicationVersion)
-};
-
-// https://github.com/electron/electron/issues/18918
-// https://github.com/mifi/lossless-cut/issues/1537
-if (isLinux) {
-  aboutPanelOptions.version = appVersion;
-}
-if (!showVersion) {
-  // https://github.com/mifi/lossless-cut/issues/1882
-  aboutPanelOptions.applicationVersion = `${process.windowsStore ? 'Microsoft Store' : 'App Store'} edition, based on GitHub v${appVersion}`;
+if (isWindows) {
+  // in order to set the title on OS notifications on Windows, this needs to be set to app.name
+  // https://github.com/mifi/lossless-cut/pull/2139
+  // https://stackoverflow.com/a/65863174/6519037
+  app.setAppUserModelId(app.name);
 }
 
 // https://www.electronjs.org/docs/latest/api/app#appsetaboutpaneloptionsoptions
-app.setAboutPanelOptions(aboutPanelOptions);
+app.setAboutPanelOptions(getAboutPanelOptions());
 
 let filesToOpen: string[] = [];
 
@@ -405,7 +393,8 @@ export function focusWindow() {
 }
 
 export function quitApp() {
-  electron.app.quit();
+  // allow HTTP API to respond etc.
+  timers.setTimeout(1000).then(() => electron.app.quit());
 }
 
 export const hasDisabledNetworking = () => !!disableNetworking;

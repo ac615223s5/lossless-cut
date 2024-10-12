@@ -14,6 +14,7 @@ import CopyClipboardButton from '../components/CopyClipboardButton';
 import Checkbox from '../components/Checkbox';
 import { isWindows, showItemInFolder } from '../util';
 import { ParseTimecode, SegmentBase } from '../types';
+import { FindKeyframeMode } from '../ffmpeg';
 
 const remote = window.require('@electron/remote');
 const { dialog, shell } = remote;
@@ -168,6 +169,13 @@ export async function showMuxNotSupported() {
   });
 }
 
+export async function showOutputNotWritable() {
+  await Swal.fire({
+    icon: 'error',
+    text: i18n.t('You are not allowed to write the output file. This probably means that the file already exists with the wrong permissions, or you don\'t have write permissions to the output folder.'),
+  });
+}
+
 export async function showRefuseToOverwrite() {
   await Swal.fire({
     icon: 'warning',
@@ -284,8 +292,8 @@ async function askForSegmentsRandomDurationRange() {
   return parse(value);
 }
 
-async function askForSegmentsStartOrEnd(text) {
-  const { value } = await Swal.fire({
+async function askForSegmentsStartOrEnd(text: string) {
+  const { value } = await Swal.fire<string>({
     input: 'radio',
     showCancelButton: true,
     inputOptions: {
@@ -316,7 +324,7 @@ export async function askForShiftSegments({ inputPlaceholder, parseTimecode }: {
     return undefined;
   }
 
-  const { value } = await Swal.fire({
+  const { value } = await Swal.fire<string>({
     input: 'text',
     showCancelButton: true,
     inputValue: inputPlaceholder,
@@ -345,7 +353,7 @@ export async function askForAlignSegments() {
   const startOrEnd = await askForSegmentsStartOrEnd(i18n.t('Do you want to align the segment start or end timestamps to keyframes?'));
   if (startOrEnd == null) return undefined;
 
-  const { value: mode } = await Swal.fire({
+  const { value: mode } = await Swal.fire<FindKeyframeMode>({
     input: 'radio',
     showCancelButton: true,
     inputOptions: {
@@ -353,7 +361,7 @@ export async function askForAlignSegments() {
       before: i18n.t('Previous keyframe'),
       after: i18n.t('Next keyframe'),
       keyframeCutFix: i18n.t('True keyframe cut'),
-    },
+    } satisfies Record<FindKeyframeMode, unknown>,
     inputValue: 'keyframeCutFix',
     text: i18n.t('Do you want to align segment times to the nearest, previous or next keyframe?'),
   });
@@ -537,8 +545,8 @@ export async function showConcatFailedDialog({ fileFormat }: { fileFormat: strin
   return value;
 }
 
-export function openYouTubeChaptersDialog(text: string) {
-  ReactSwal.fire({
+export async function openYouTubeChaptersDialog(text: string) {
+  await ReactSwal.fire({
     showCloseButton: true,
     title: i18n.t('YouTube Chapters'),
     html: (
