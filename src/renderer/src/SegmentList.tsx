@@ -338,7 +338,7 @@ function SegmentList({
   }, [apparentCutSegments.length, t, updateSegOrder]);
 
   function renderFooter() {
-    const getButtonColor = (seg) => getSegColor(seg).desaturate(0.3).lightness(darkMode ? 45 : 55).string();
+    const getButtonColor = (seg: StateSegment | undefined) => getSegColor(seg).desaturate(0.3).lightness(darkMode ? 45 : 55).string();
     const currentSegColor = getButtonColor(currentCutSeg);
     const segAtCursorColor = getButtonColor(segmentAtCursor);
 
@@ -389,6 +389,14 @@ function SegmentList({
             role="button"
             style={{ ...buttonBaseStyle, padding: 1, background: segmentAtCursor ? segAtCursorColor : neutralButtonColor }}
             onClick={splitCurrentSegment}
+          />
+
+          <FaRegCheckCircle
+            size={22}
+            title={t('Split segment at cursor')}
+            role="button"
+            style={{ ...buttonBaseStyle, padding: 1, background: segmentAtCursor ? segAtCursorColor : neutralButtonColor }}
+            onClick={onInvertSelectedSegments}
           />
         </div>
 
