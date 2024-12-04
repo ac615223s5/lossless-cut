@@ -4,14 +4,14 @@ import sum from 'lodash/sum';
 import pMap from 'p-map';
 import invariant from 'tiny-invariant';
 
-import { getSuffixedOutPath, transferTimestamps, getOutFileExtension, getOutDir, deleteDispositionValue, getHtml5ifiedPath, unlinkWithRetry, getFrameDuration } from '../util';
-import { isCuttingStart, isCuttingEnd, runFfmpegWithProgress, getFfCommandLine, getDuration, createChaptersFromSegments, readFileMeta, cutEncodeSmartPart, getExperimentalArgs, html5ify as ffmpegHtml5ify, getVideoTimescaleArgs, logStdoutStderr, runFfmpegConcat } from '../ffmpeg';
+import { getSuffixedOutPath, transferTimestamps, getOutFileExtension, getOutDir, deleteDispositionValue, getHtml5ifiedPath, unlinkWithRetry, getFrameDuration, isMac } from '../util';
+import { isCuttingStart, isCuttingEnd, runFfmpegWithProgress, getFfCommandLine, getDuration, createChaptersFromSegments, readFileMeta, getExperimentalArgs, getVideoTimescaleArgs, logStdoutStderr, runFfmpegConcat, RefuseOverwriteError, runFfmpeg } from '../ffmpeg';
 import { getMapStreamsArgs, getStreamIdsToCopy } from '../util/streams';
 import { getSmartCutParams } from '../smartcut';
 import { isDurationValid } from '../segments';
 import { FFprobeStream } from '../../../../ffprobe';
 import { AvoidNegativeTs, Html5ifyMode, PreserveMetadata } from '../../../../types';
-import { AllFilesMeta, Chapter, CopyfileStreams, CustomTagsByFile, ParamsByStreamId, SegmentToExport } from '../types';
+import { AllFilesMeta, Chapter, CopyfileStreams, CustomTagsByFile, LiteFFprobeStream, ParamsByStreamId, SegmentToExport } from '../types';
 
 const { join, resolve, dirname } = window.require('path');
 const { writeFile, mkdir, access, constants: { F_OK, W_OK } } = window.require('fs/promises');
@@ -76,7 +76,7 @@ async function pathExists(path: string) {
   }
 }
 
-function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, treatOutputFileModifiedTimeAsStart, needSmartCut, enableOverwriteOutput, outputPlaybackRate, cutFromAdjustmentFrames, appendLastCommandsLog, smartCutCustomBitrate }: {
+function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, treatOutputFileModifiedTimeAsStart, needSmartCut, enableOverwriteOutput, outputPlaybackRate, cutFromAdjustmentFrames, appendLastCommandsLog, smartCutCustomBitrate, appendFfmpegCommandLog }: {
   filePath: string | undefined,
   treatInputFileModifiedTimeAsStart: boolean | null | undefined,
   treatOutputFileModifiedTimeAsStart: boolean | null | undefined,
@@ -86,9 +86,8 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
   cutFromAdjustmentFrames: number,
   appendLastCommandsLog: (a: string) => void,
   smartCutCustomBitrate: number | undefined,
+  appendFfmpegCommandLog: (args: string[]) => void,
 }) {
-  const appendFfmpegCommandLog = useCallback((args: string[]) => appendLastCommandsLog(getFfCommandLine('ffmpeg', args)), [appendLastCommandsLog]);
-
   const shouldSkipExistingFile = useCallback(async (path: string) => {
     const fileExists = await pathExists(path);
 
@@ -418,6 +417,60 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
     await transferTimestamps({ inPath: filePath, outPath, cutFrom, cutTo, treatInputFileModifiedTimeAsStart, duration: isDurationValid(videoDuration) ? videoDuration : undefined, treatOutputFileModifiedTimeAsStart });
   }, [appendFfmpegCommandLog, cutFromAdjustmentFrames, filePath, getOutputPlaybackRateArgs, shouldSkipExistingFile, treatInputFileModifiedTimeAsStart, treatOutputFileModifiedTimeAsStart]);
 
+  // inspired by https://gist.github.com/fernandoherreradelasheras/5eca67f4200f1a7cc8281747da08496e
+  const cutEncodeSmartPart = useCallback(async ({ cutFrom, cutTo, outPath, outFormat, videoCodec, videoBitrate, videoTimebase, allFilesMeta, copyFileStreams, videoStreamIndex, ffmpegExperimental }: {
+    cutFrom: number, cutTo: number, outPath: string, outFormat: string, videoCodec: string, videoBitrate: number, videoTimebase: number, allFilesMeta: AllFilesMeta, copyFileStreams: CopyfileStreams, videoStreamIndex: number, ffmpegExperimental: boolean,
+  }) => {
+    invariant(filePath != null);
+
+    function getVideoArgs({ streamIndex, outputIndex }: { streamIndex: number, outputIndex: number }) {
+      if (streamIndex !== videoStreamIndex) return undefined;
+
+      const args = [
+        `-c:${outputIndex}`, videoCodec,
+        `-b:${outputIndex}`, String(videoBitrate),
+      ];
+
+      // seems like ffmpeg handles this itself well when encoding same source file
+      // if (videoLevel != null) args.push(`-level:${outputIndex}`, videoLevel);
+      // if (videoProfile != null) args.push(`-profile:${outputIndex}`, videoProfile);
+
+      return args;
+    }
+
+    const mapStreamsArgs = getMapStreamsArgs({
+      allFilesMeta,
+      copyFileStreams,
+      outFormat,
+      getVideoArgs,
+    });
+
+    const ffmpegArgs = [
+      '-hide_banner',
+      // No progress if we set loglevel warning :(
+      // '-loglevel', 'warning',
+
+      '-ss', cutFrom.toFixed(5), // if we don't -ss before -i, seeking will be slow for long files, see https://github.com/mifi/lossless-cut/issues/126#issuecomment-1135451043
+      '-i', filePath,
+      '-ss', '0', // If we don't do this, the output seems to start with an empty black after merging with the encoded part
+      '-t', (cutTo - cutFrom).toFixed(5),
+
+      ...mapStreamsArgs,
+
+      // See https://github.com/mifi/lossless-cut/issues/170
+      '-ignore_unknown',
+
+      ...getVideoTimescaleArgs(videoTimebase),
+
+      ...getExperimentalArgs(ffmpegExperimental),
+
+      '-f', outFormat, '-y', outPath,
+    ];
+
+    appendFfmpegCommandLog(ffmpegArgs);
+    await runFfmpeg(ffmpegArgs);
+  }, [appendFfmpegCommandLog, filePath]);
+
   const cutMultiple = useCallback(async ({
     outputDir, customOutDir, segments, outSegFileNames, videoDuration, rotation, detectedFps, onProgress: onTotalProgress, keyframeCut, copyFileStreams, allFilesMeta, outFormat, shortestFlag, ffmpegExperimental, preserveMetadata, preserveMetadataOnMerge, preserveMovData, preserveChapters, movFastStart, avoidNegativeTs, customTagsByFile, paramsByStreamId, chapters,
   }: {
@@ -509,8 +562,7 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
         if (videoCodec == null || detectedVideoBitrate == null || videoTimebase == null) throw new Error();
         invariant(filePath != null);
         invariant(outFormat != null);
-        const args = await cutEncodeSmartPart({ filePath, cutFrom, cutTo, outPath, outFormat, videoCodec, videoBitrate: smartCutCustomBitrate != null ? smartCutCustomBitrate * 1000 : detectedVideoBitrate, videoStreamIndex, videoTimebase, allFilesMeta, copyFileStreams: copyFileStreamsFiltered, ffmpegExperimental });
-        appendFfmpegCommandLog(args);
+        await cutEncodeSmartPart({ cutFrom, cutTo, outPath, outFormat, videoCodec, videoBitrate: smartCutCustomBitrate != null ? smartCutCustomBitrate * 1000 : detectedVideoBitrate, videoStreamIndex, videoTimebase, allFilesMeta, copyFileStreams: copyFileStreamsFiltered, ffmpegExperimental });
       }
 
       // If we are cutting within two keyframes, just encode the whole part and return that
@@ -573,7 +625,7 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
     } finally {
       if (chaptersPath) await tryDeleteFiles([chaptersPath]);
     }
-  }, [needSmartCut, filePath, losslessCutSingle, shouldSkipExistingFile, smartCutCustomBitrate, appendFfmpegCommandLog, concatFiles]);
+  }, [needSmartCut, filePath, losslessCutSingle, shouldSkipExistingFile, cutEncodeSmartPart, smartCutCustomBitrate, concatFiles]);
 
   const autoConcatCutSegments = useCallback(async ({ customOutDir, outFormat, segmentPaths, ffmpegExperimental, onProgress, preserveMovData, movFastStart, autoDeleteMergedSegments, chapterNames, preserveMetadataOnMerge, mergedOutFilePath }: {
     customOutDir: string | undefined,
@@ -607,11 +659,115 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
   }) => {
     const outPath = getHtml5ifiedPath(customOutDir, filePathArg, speed);
     invariant(outPath != null);
-    await ffmpegHtml5ify({ filePath: filePathArg, outPath, speed, hasAudio, hasVideo, onProgress });
+
+    let audio: string | undefined;
+    if (hasAudio) {
+      if (speed === 'slowest') audio = 'hq';
+      else if (['slow-audio', 'fast-audio'].includes(speed)) audio = 'lq';
+      else if (['fast-audio-remux'].includes(speed)) audio = 'copy';
+    }
+
+    let video: string | undefined;
+    if (hasVideo) {
+      if (speed === 'slowest') video = 'hq';
+      else if (['slow-audio', 'slow'].includes(speed)) video = 'lq';
+      else video = 'copy';
+    }
+
+    console.log('Making HTML5 friendly version', { filePathArg, outPath, speed, video, audio });
+
+    let videoArgs: string[];
+    let audioArgs: string[];
+
+    // h264/aac_at: No licensing when using HW encoder (Video/Audio Toolbox on Mac)
+    // https://github.com/mifi/lossless-cut/issues/372#issuecomment-810766512
+
+    const targetHeight = 400;
+
+    switch (video) {
+      case 'hq': {
+        // eslint-disable-next-line unicorn/prefer-ternary
+        if (isMac) {
+          videoArgs = ['-vf', 'format=yuv420p', '-allow_sw', '1', '-vcodec', 'h264', '-b:v', '15M'];
+        } else {
+          // AV1 is very slow
+          // videoArgs = ['-vf', 'format=yuv420p', '-sws_flags', 'neighbor', '-vcodec', 'libaom-av1', '-crf', '30', '-cpu-used', '8'];
+          // Theora is a bit faster but not that much
+          // videoArgs = ['-vf', '-c:v', 'libtheora', '-qscale:v', '1'];
+          // videoArgs = ['-vf', 'format=yuv420p', '-c:v', 'libvpx-vp9', '-crf', '30', '-b:v', '0', '-row-mt', '1'];
+          // x264 can only be used in GPL projects
+          videoArgs = ['-vf', 'format=yuv420p', '-c:v', 'libx264', '-profile:v', 'high', '-preset:v', 'slow', '-crf', '17'];
+        }
+        break;
+      }
+      case 'lq': {
+        // eslint-disable-next-line unicorn/prefer-ternary
+        if (isMac) {
+          videoArgs = ['-vf', `scale=-2:${targetHeight},format=yuv420p`, '-allow_sw', '1', '-sws_flags', 'lanczos', '-vcodec', 'h264', '-b:v', '1500k'];
+        } else {
+          // videoArgs = ['-vf', `scale=-2:${targetHeight},format=yuv420p`, '-sws_flags', 'neighbor', '-c:v', 'libtheora', '-qscale:v', '1'];
+          // x264 can only be used in GPL projects
+          videoArgs = ['-vf', `scale=-2:${targetHeight},format=yuv420p`, '-sws_flags', 'neighbor', '-c:v', 'libx264', '-profile:v', 'baseline', '-x264opts', 'level=3.0', '-preset:v', 'ultrafast', '-crf', '28'];
+        }
+        break;
+      }
+      case 'copy': {
+        videoArgs = ['-vcodec', 'copy'];
+        break;
+      }
+      default: {
+        videoArgs = ['-vn'];
+      }
+    }
+
+    switch (audio) {
+      case 'hq': {
+        // eslint-disable-next-line unicorn/prefer-ternary
+        if (isMac) {
+          audioArgs = ['-acodec', 'aac_at', '-b:a', '192k'];
+        } else {
+          audioArgs = ['-acodec', 'flac'];
+        }
+        break;
+      }
+      case 'lq': {
+        // eslint-disable-next-line unicorn/prefer-ternary
+        if (isMac) {
+          audioArgs = ['-acodec', 'aac_at', '-ar', '44100', '-ac', '2', '-b:a', '96k'];
+        } else {
+          audioArgs = ['-acodec', 'flac', '-ar', '11025', '-ac', '2'];
+        }
+        break;
+      }
+      case 'copy': {
+        audioArgs = ['-acodec', 'copy'];
+        break;
+      }
+      default: {
+        audioArgs = ['-an'];
+      }
+    }
+
+    const ffmpegArgs = [
+      '-hide_banner',
+
+      '-i', filePathArg,
+      ...videoArgs,
+      ...audioArgs,
+      '-sn',
+      '-y', outPath,
+    ];
+
+    const duration = await getDuration(filePathArg);
+    appendFfmpegCommandLog(ffmpegArgs);
+    const { stdout } = await runFfmpegWithProgress({ ffmpegArgs, duration, onProgress });
+
+    console.log(stdout.toString('utf8'));
+
     invariant(outPath != null);
     await transferTimestamps({ inPath: filePathArg, outPath, treatOutputFileModifiedTimeAsStart });
     return outPath;
-  }, [treatOutputFileModifiedTimeAsStart]);
+  }, [appendFfmpegCommandLog, treatOutputFileModifiedTimeAsStart]);
 
   // This is just used to load something into the player with correct duration,
   // so that the user can seek and then we render frames using ffmpeg & MediaSource
@@ -674,8 +830,145 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
     return outPath;
   }, [appendFfmpegCommandLog, filePath, treatOutputFileModifiedTimeAsStart]);
 
+  function getPreferredCodecFormat(stream: LiteFFprobeStream) {
+    const map = {
+      mp3: { format: 'mp3', ext: 'mp3' },
+      opus: { format: 'opus', ext: 'opus' },
+      vorbis: { format: 'ogg', ext: 'ogg' },
+      h264: { format: 'mp4', ext: 'mp4' },
+      hevc: { format: 'mp4', ext: 'mp4' },
+      eac3: { format: 'eac3', ext: 'eac3' },
+
+      subrip: { format: 'srt', ext: 'srt' },
+      mov_text: { format: 'mp4', ext: 'mp4' },
+
+      m4a: { format: 'ipod', ext: 'm4a' },
+      aac: { format: 'adts', ext: 'aac' },
+      jpeg: { format: 'image2', ext: 'jpeg' },
+      png: { format: 'image2', ext: 'png' },
+
+      // TODO add more
+      // TODO allow user to change?
+    };
+
+    const match = map[stream.codec_name];
+    if (match) return match;
+
+    // default fallbacks:
+    if (stream.codec_type === 'video') return { ext: 'mkv', format: 'matroska' };
+    if (stream.codec_type === 'audio') return { ext: 'mka', format: 'matroska' };
+    if (stream.codec_type === 'subtitle') return { ext: 'mks', format: 'matroska' };
+    if (stream.codec_type === 'data') return { ext: 'bin', format: 'data' }; // https://superuser.com/questions/1243257/save-data-stream
+
+    return undefined;
+  }
+
+  const extractNonAttachmentStreams = useCallback(async ({ customOutDir, streams }: {
+    customOutDir?: string | undefined, streams: FFprobeStream[],
+  }) => {
+    invariant(filePath != null);
+    if (streams.length === 0) return [];
+
+    const outStreams = streams.map((s) => ({
+      index: s.index,
+      codec: s.codec_name || s.codec_tag_string || s.codec_type,
+      type: s.codec_type,
+      format: getPreferredCodecFormat(s),
+    }))
+      .filter(({ format, index }) => format != null && index != null);
+
+    // console.log(outStreams);
+
+
+    let streamArgs: string[] = [];
+    const outPaths = await pMap(outStreams, async ({ index, codec, type, format: { format, ext } }) => {
+      const outPath = getSuffixedOutPath({ customOutDir, filePath, nameSuffix: `stream-${index}-${type}-${codec}.${ext}` });
+      if (!enableOverwriteOutput && await pathExists(outPath)) throw new RefuseOverwriteError();
+
+      streamArgs = [
+        ...streamArgs,
+        '-map', `0:${index}`, '-c', 'copy', '-f', format, '-y', outPath,
+      ];
+      return outPath;
+    }, { concurrency: 1 });
+
+    const ffmpegArgs = [
+      '-hide_banner',
+
+      '-i', filePath,
+      ...streamArgs,
+    ];
+
+    appendFfmpegCommandLog(ffmpegArgs);
+    const { stdout } = await runFfmpeg(ffmpegArgs);
+    console.log(stdout.toString('utf8'));
+
+    return outPaths;
+  }, [appendFfmpegCommandLog, enableOverwriteOutput, filePath]);
+
+  const extractAttachmentStreams = useCallback(async ({ customOutDir, streams }: {
+    customOutDir?: string | undefined, streams: FFprobeStream[],
+  }) => {
+    invariant(filePath != null);
+    if (streams.length === 0) return [];
+
+    console.log('Extracting', streams.length, 'attachment streams');
+
+    let streamArgs: string[] = [];
+    const outPaths = await pMap(streams, async ({ index, codec_name: codec, codec_type: type }) => {
+      const ext = codec || 'bin';
+      const outPath = getSuffixedOutPath({ customOutDir, filePath, nameSuffix: `stream-${index}-${type}-${codec}.${ext}` });
+      if (outPath == null) throw new Error();
+      if (!enableOverwriteOutput && await pathExists(outPath)) throw new RefuseOverwriteError();
+
+      streamArgs = [
+        ...streamArgs,
+        `-dump_attachment:${index}`, outPath,
+      ];
+      return outPath;
+    }, { concurrency: 1 });
+
+    const ffmpegArgs = [
+      '-y',
+      '-hide_banner',
+      '-loglevel', 'error',
+      ...streamArgs,
+      '-i', filePath,
+    ];
+
+    try {
+      appendFfmpegCommandLog(ffmpegArgs);
+      const { stdout } = await runFfmpeg(ffmpegArgs);
+      console.log(stdout.toString('utf8'));
+    } catch (err) {
+      // Unfortunately ffmpeg will exit with code 1 even though it's a success
+      // Note: This is kind of hacky:
+      if (err instanceof Error && 'exitCode' in err && 'stderr' in err && err.exitCode === 1 && typeof err.stderr === 'string' && err.stderr.includes('At least one output file must be specified')) return outPaths;
+      throw err;
+    }
+    return outPaths;
+  }, [appendFfmpegCommandLog, enableOverwriteOutput, filePath]);
+
+  // https://stackoverflow.com/questions/32922226/extract-every-audio-and-subtitles-from-a-video-with-ffmpeg
+  const extractStreams = useCallback(async ({ customOutDir, streams }: {
+    customOutDir: string | undefined, streams: FFprobeStream[],
+  }) => {
+    invariant(filePath != null);
+
+    const attachmentStreams = streams.filter((s) => s.codec_type === 'attachment');
+    const nonAttachmentStreams = streams.filter((s) => s.codec_type !== 'attachment');
+
+    // TODO progress
+
+    // Attachment streams are handled differently from normal streams
+    return [
+      ...(await extractNonAttachmentStreams({ customOutDir, streams: nonAttachmentStreams })),
+      ...(await extractAttachmentStreams({ customOutDir, streams: attachmentStreams })),
+    ];
+  }, [extractAttachmentStreams, extractNonAttachmentStreams, filePath]);
+
   return {
-    cutMultiple, concatFiles, html5ify, html5ifyDummy, fixInvalidDuration, autoConcatCutSegments,
+    cutMultiple, concatFiles, html5ify, html5ifyDummy, fixInvalidDuration, autoConcatCutSegments, extractStreams,
   };
 }
 

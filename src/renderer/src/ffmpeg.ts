@@ -5,22 +5,19 @@ import Timecode from 'smpte-timecode';
 import minBy from 'lodash/minBy';
 import invariant from 'tiny-invariant';
 
-import { pcmAudioCodecs, getMapStreamsArgs, isMov } from './util/streams';
-import { getSuffixedOutPath, isExecaError } from './util';
+import { pcmAudioCodecs, isMov } from './util/streams';
+import { isExecaError } from './util';
 import { isDurationValid } from './segments';
 import { FFprobeChapter, FFprobeFormat, FFprobeProbeResult, FFprobeStream } from '../../../ffprobe';
 import { parseSrt, parseSrtToSegments } from './edlFormats';
-import { CopyfileStreams, LiteFFprobeStream } from './types';
 import { UnsupportedFileError } from '../errors';
-
-const { pathExists } = window.require('fs-extra');
 
 const { ffmpeg, fileTypePromise } = window.require('@electron/remote').require('./index.js');
 
-const { renderWaveformPng, mapTimesToSegments, detectSceneChanges, captureFrames, captureFrame, getFfCommandLine, runFfmpegConcat, runFfmpegWithProgress, html5ify, getDuration, abortFfmpegs, runFfmpeg, runFfprobe, getFfmpegPath, setCustomFfPath } = ffmpeg;
+const { renderWaveformPng, mapTimesToSegments, detectSceneChanges, captureFrames, captureFrame, getFfCommandLine, runFfmpegConcat, runFfmpegWithProgress, getDuration, abortFfmpegs, runFfmpeg, runFfprobe, getFfmpegPath, setCustomFfPath } = ffmpeg;
 
 
-export { renderWaveformPng, mapTimesToSegments, detectSceneChanges, captureFrames, captureFrame, getFfCommandLine, runFfmpegConcat, runFfmpegWithProgress, html5ify, getDuration, abortFfmpegs, runFfprobe, getFfmpegPath, setCustomFfPath };
+export { renderWaveformPng, mapTimesToSegments, detectSceneChanges, captureFrames, captureFrame, getFfCommandLine, runFfmpegConcat, runFfmpegWithProgress, getDuration, abortFfmpegs, runFfmpeg, getFfmpegPath, setCustomFfPath };
 
 
 export class RefuseOverwriteError extends Error {
@@ -79,7 +76,7 @@ export async function readFrames({ filePath, from, to, streamIndex }: {
   filePath: string, from?: number | undefined, to?: number | undefined, streamIndex: number,
 }) {
   const intervalsArgs = from != null && to != null ? ['-read_intervals', `${from}%${to}`] : [];
-  const { stdout } = await runFfprobe(['-v', 'error', ...intervalsArgs, '-show_packets', '-select_streams', String(streamIndex), '-show_entries', 'packet=pts_time,flags', '-of', 'json', filePath]);
+  const { stdout } = await runFfprobe(['-v', 'error', ...intervalsArgs, '-show_packets', '-select_streams', String(streamIndex), '-show_entries', 'packet=pts_time,flags', '-of', 'json', filePath], { logCli: false });
   const packetsFiltered: Frame[] = (JSON.parse(stdout as unknown as string).packets as { flags: string, pts_time: string }[])
     .map((p) => ({
       keyframe: p.flags[0] === 'K',
@@ -145,11 +142,11 @@ export async function findKeyframeNearTime({ filePath, streamIndex, time, mode }
 // todo this is not in use
 // https://stackoverflow.com/questions/14005110/how-to-split-a-video-using-ffmpeg-so-that-each-chunk-starts-with-a-key-frame
 // http://kicherer.org/joomla/index.php/de/blog/42-avcut-frame-accurate-video-cutting-with-only-small-quality-loss
-export function getSafeCutTime(frames, cutTime, nextMode) {
+export function getSafeCutTime(frames: (Frame & { time: number })[], cutTime: number, nextMode: boolean) {
   const sigma = 0.01;
-  const isCloseTo = (time1, time2) => Math.abs(time1 - time2) < sigma;
+  const isCloseTo = (time1: number, time2: number) => Math.abs(time1 - time2) < sigma;
 
-  let index;
+  let index: number;
 
   if (frames.length < 2) throw new Error(i18n.t('Less than 2 frames found'));
 
@@ -157,7 +154,7 @@ export function getSafeCutTime(frames, cutTime, nextMode) {
     index = frames.findIndex((f) => f.keyframe && f.time >= cutTime - sigma);
     if (index === -1) throw new Error(i18n.t('Failed to find next keyframe'));
     if (index >= frames.length - 1) throw new Error(i18n.t('We are on the last frame'));
-    const { time } = frames[index];
+    const { time } = frames[index]!;
     if (isCloseTo(time, cutTime)) {
       return undefined; // Already on keyframe, no need to modify cut time
     }
@@ -179,7 +176,7 @@ export function getSafeCutTime(frames, cutTime, nextMode) {
     // Last frame of video, no need to modify cut time
     return undefined;
   }
-  if (frames[index + 1].keyframe) {
+  if (frames[index + 1]!.keyframe) {
     // Already on frame before keyframe, no need to modify cut time
     return undefined;
   }
@@ -190,7 +187,7 @@ export function getSafeCutTime(frames, cutTime, nextMode) {
   if (index === 0) throw new Error(i18n.t('We are on the first keyframe'));
 
   // Use frame before the found keyframe
-  return frames[index - 1].time;
+  return frames[index - 1]!.time;
 }
 
 export function findNearestKeyFrameTime({ frames, time, direction, fps }: { frames: Frame[], time: number, direction: number, fps: number | undefined }) {
@@ -202,7 +199,7 @@ export function findNearestKeyFrameTime({ frames, time, direction, fps }: { fram
   return nearestKeyFrame.time;
 }
 
-export async function tryMapChaptersToEdl(chapters: FFprobeChapter[]) {
+export function tryMapChaptersToEdl(chapters: FFprobeChapter[]) {
   try {
     return chapters.map((chapter) => {
       const start = parseFloat(chapter.start_time);
@@ -378,137 +375,6 @@ export async function readFileMeta(filePath: string) {
   }
 }
 
-function getPreferredCodecFormat(stream: LiteFFprobeStream) {
-  const map = {
-    mp3: { format: 'mp3', ext: 'mp3' },
-    opus: { format: 'opus', ext: 'opus' },
-    vorbis: { format: 'ogg', ext: 'ogg' },
-    h264: { format: 'mp4', ext: 'mp4' },
-    hevc: { format: 'mp4', ext: 'mp4' },
-    eac3: { format: 'eac3', ext: 'eac3' },
-
-    subrip: { format: 'srt', ext: 'srt' },
-    mov_text: { format: 'mp4', ext: 'mp4' },
-
-    m4a: { format: 'ipod', ext: 'm4a' },
-    aac: { format: 'adts', ext: 'aac' },
-    jpeg: { format: 'image2', ext: 'jpeg' },
-    png: { format: 'image2', ext: 'png' },
-
-    // TODO add more
-    // TODO allow user to change?
-  };
-
-  const match = map[stream.codec_name];
-  if (match) return match;
-
-  // default fallbacks:
-  if (stream.codec_type === 'video') return { ext: 'mkv', format: 'matroska' };
-  if (stream.codec_type === 'audio') return { ext: 'mka', format: 'matroska' };
-  if (stream.codec_type === 'subtitle') return { ext: 'mks', format: 'matroska' };
-  if (stream.codec_type === 'data') return { ext: 'bin', format: 'data' }; // https://superuser.com/questions/1243257/save-data-stream
-
-  return undefined;
-}
-
-async function extractNonAttachmentStreams({ customOutDir, filePath, streams, enableOverwriteOutput }: {
-  customOutDir?: string | undefined, filePath: string, streams: FFprobeStream[], enableOverwriteOutput: boolean | undefined,
-}) {
-  if (streams.length === 0) return [];
-
-  const outStreams = streams.map((s) => ({
-    index: s.index,
-    codec: s.codec_name || s.codec_tag_string || s.codec_type,
-    type: s.codec_type,
-    format: getPreferredCodecFormat(s),
-  }))
-    .filter(({ format, index }) => format != null && index != null);
-
-  // console.log(outStreams);
-
-
-  let streamArgs: string[] = [];
-  const outPaths = await pMap(outStreams, async ({ index, codec, type, format: { format, ext } }) => {
-    const outPath = getSuffixedOutPath({ customOutDir, filePath, nameSuffix: `stream-${index}-${type}-${codec}.${ext}` });
-    if (!enableOverwriteOutput && await pathExists(outPath)) throw new RefuseOverwriteError();
-
-    streamArgs = [
-      ...streamArgs,
-      '-map', `0:${index}`, '-c', 'copy', '-f', format, '-y', outPath,
-    ];
-    return outPath;
-  }, { concurrency: 1 });
-
-  const ffmpegArgs = [
-    '-hide_banner',
-
-    '-i', filePath,
-    ...streamArgs,
-  ];
-
-  const { stdout } = await runFfmpeg(ffmpegArgs, undefined, { logCli: true });
-  console.log(stdout.toString('utf8'));
-
-  return outPaths;
-}
-
-async function extractAttachmentStreams({ customOutDir, filePath, streams, enableOverwriteOutput }: {
-  customOutDir?: string | undefined, filePath: string, streams: FFprobeStream[], enableOverwriteOutput: boolean | undefined,
-}) {
-  if (streams.length === 0) return [];
-
-  console.log('Extracting', streams.length, 'attachment streams');
-
-  let streamArgs: string[] = [];
-  const outPaths = await pMap(streams, async ({ index, codec_name: codec, codec_type: type }) => {
-    const ext = codec || 'bin';
-    const outPath = getSuffixedOutPath({ customOutDir, filePath, nameSuffix: `stream-${index}-${type}-${codec}.${ext}` });
-    if (outPath == null) throw new Error();
-    if (!enableOverwriteOutput && await pathExists(outPath)) throw new RefuseOverwriteError();
-
-    streamArgs = [
-      ...streamArgs,
-      `-dump_attachment:${index}`, outPath,
-    ];
-    return outPath;
-  }, { concurrency: 1 });
-
-  const ffmpegArgs = [
-    '-y',
-    '-hide_banner',
-    '-loglevel', 'error',
-    ...streamArgs,
-    '-i', filePath,
-  ];
-
-  try {
-    const { stdout } = await runFfmpeg(ffmpegArgs, undefined, { logCli: true });
-    console.log(stdout.toString('utf8'));
-  } catch (err) {
-    // Unfortunately ffmpeg will exit with code 1 even though it's a success
-    // Note: This is kind of hacky:
-    if (err instanceof Error && 'exitCode' in err && 'stderr' in err && err.exitCode === 1 && typeof err.stderr === 'string' && err.stderr.includes('At least one output file must be specified')) return outPaths;
-    throw err;
-  }
-  return outPaths;
-}
-
-// https://stackoverflow.com/questions/32922226/extract-every-audio-and-subtitles-from-a-video-with-ffmpeg
-export async function extractStreams({ filePath, customOutDir, streams, enableOverwriteOutput }: {
-  filePath: string, customOutDir: string | undefined, streams: FFprobeStream[], enableOverwriteOutput?: boolean | undefined,
-}) {
-  const attachmentStreams = streams.filter((s) => s.codec_type === 'attachment');
-  const nonAttachmentStreams = streams.filter((s) => s.codec_type !== 'attachment');
-
-  // TODO progress
-
-  // Attachment streams are handled differently from normal streams
-  return [
-    ...(await extractNonAttachmentStreams({ customOutDir, filePath, streams: nonAttachmentStreams, enableOverwriteOutput })),
-    ...(await extractAttachmentStreams({ customOutDir, filePath, streams: attachmentStreams, enableOverwriteOutput })),
-  ];
-}
-
 async function renderThumbnail(filePath: string, timestamp: number, signal: AbortSignal) {
   const args = [
     '-ss', String(timestamp),
@@ -520,7 +386,7 @@ async function renderThumbnail(filePath: string, timestamp: number, signal: Abor
     '-',
   ];
 
-  const { stdout } = await runFfmpeg(args, { signal });
+  const { stdout } = await runFfmpeg(args, { signal }, { logCli: false });
 
   const blob = new Blob([fixRemoteBuffer(stdout)], { type: 'image/jpeg' });
   return URL.createObjectURL(blob);
@@ -604,7 +470,7 @@ export async function extractWaveform({ filePath, outPath }: { filePath: string,
     '-f', 'wav',
     '-y',
     outPath,
-  ]);
+  ], undefined, { logCli: false });
   console.timeEnd('ffmpeg');
 }
 
@@ -694,56 +560,3 @@ export async function runFfmpegStartupCheck() {
 export const getExperimentalArgs = (ffmpegExperimental: boolean) => (ffmpegExperimental ? ['-strict', 'experimental'] : []);
 
 export const getVideoTimescaleArgs = (videoTimebase: number | undefined) => (videoTimebase != null ? ['-video_track_timescale', String(videoTimebase)] : []);
-
-// inspired by https://gist.github.com/fernandoherreradelasheras/5eca67f4200f1a7cc8281747da08496e
-export async function cutEncodeSmartPart({ filePath, cutFrom, cutTo, outPath, outFormat, videoCodec, videoBitrate, videoTimebase, allFilesMeta, copyFileStreams, videoStreamIndex, ffmpegExperimental }: {
-  filePath: string, cutFrom: number, cutTo: number, outPath: string, outFormat: string, videoCodec: string, videoBitrate: number, videoTimebase: number, allFilesMeta, copyFileStreams: CopyfileStreams, videoStreamIndex: number, ffmpegExperimental: boolean,
-}) {
-  function getVideoArgs({ streamIndex, outputIndex }: { streamIndex: number, outputIndex: number }) {
-    if (streamIndex !== videoStreamIndex) return undefined;
-
-    const args = [
-      `-c:${outputIndex}`, videoCodec,
-      `-b:${outputIndex}`, String(videoBitrate),
-    ];
-
-    // seems like ffmpeg handles this itself well when encoding same source file
-    // if (videoLevel != null) args.push(`-level:${outputIndex}`, videoLevel);
-    // if (videoProfile != null) args.push(`-profile:${outputIndex}`, videoProfile);
-
-    return args;
-  }
-
-  const mapStreamsArgs = getMapStreamsArgs({
-    allFilesMeta,
-    copyFileStreams,
-    outFormat,
-    getVideoArgs,
-  });
-
-  const ffmpegArgs = [
-    '-hide_banner',
-    // No progress if we set loglevel warning :(
-    // '-loglevel', 'warning',
-
-    '-ss', cutFrom.toFixed(5), // if we don't -ss before -i, seeking will be slow for long files, see https://github.com/mifi/lossless-cut/issues/126#issuecomment-1135451043
-    '-i', filePath,
-    '-ss', '0', // If we don't do this, the output seems to start with an empty black after merging with the encoded part
-    '-t', (cutTo - cutFrom).toFixed(5),
-
-    ...mapStreamsArgs,
-
-    // See https://github.com/mifi/lossless-cut/issues/170
-    '-ignore_unknown',
-
-    ...getVideoTimescaleArgs(videoTimebase),
-
-    ...getExperimentalArgs(ffmpegExperimental),
-
-    '-f', outFormat, '-y', outPath,
-  ];
-
-  await runFfmpeg(ffmpegArgs);
-
-  return ffmpegArgs;
-}

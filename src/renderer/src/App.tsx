@@ -54,11 +54,12 @@ import { getSegColor } from './util/colors';
 import {
   getStreamFps, isCuttingStart, isCuttingEnd,
   readFileMeta, getDefaultOutFormat,
-  extractStreams, setCustomFfPath as ffmpegSetCustomFfPath,
+  setCustomFfPath as ffmpegSetCustomFfPath,
   isIphoneHevc, isProblematicAvc1, tryMapChaptersToEdl,
   getDuration, getTimecodeFromStreams, createChaptersFromSegments,
   RefuseOverwriteError, extractSubtitleTrackToSegments,
   mapRecommendedDefaultFormat,
+  getFfCommandLine,
 } from './ffmpeg';
 import { shouldCopyStreamByDefault, getAudioStreams, getRealVideoStreams, isAudioDefinitelyNotSupported, willPlayerProperlyHandleVideo, doesPlayerSupportHevcPlayback, getSubtitleStreams, enableVideoTrack, enableAudioTrack, canHtml5PlayerPlayStreams } from './util/streams';
 import { exportEdlFile, readEdlFile, loadLlcProject, askForEdlImport } from './edlStore';
@@ -251,6 +252,7 @@ function App() {
   const appendLastCommandsLog = useCallback((command: string) => {
     setFfmpegCommandLog((old) => [...old, { command, time: new Date() }]);
   }, []);
+  const appendFfmpegCommandLog = useCallback((args: string[]) => appendLastCommandsLog(getFfCommandLine('ffmpeg', args)), [appendLastCommandsLog]);
 
   const toggleSegmentsList = useCallback(() => setShowRightBar((v) => !v), []);
 
@@ -332,7 +334,7 @@ function App() {
 
   const {
     cutSegments, cutSegmentsHistory, createSegmentsFromKeyframes, shuffleSegments, detectBlackScenes, detectSilentScenes, detectSceneChanges, removeCutSegment, invertAllSegments, fillSegmentsGaps, combineOverlappingSegments, combineSelectedSegments, shiftAllSegmentTimes, alignSegmentTimesToKeyframes, updateSegOrder, updateSegOrders, reorderSegsByStartTime, addSegment, setCutStart, setCutEnd, onLabelSegment, splitCurrentSegment, focusSegmentAtCursor, createNumSegments, createFixedDurationSegments, createRandomSegments, apparentCutSegments, haveInvalidSegs, currentSegIndexSafe, currentCutSeg, currentApparentCutSeg, inverseCutSegments, clearSegments, loadCutSegments, isSegmentSelected, setCutTime, setCurrentSegIndex, onLabelSelectedSegments, deselectAllSegments, selectAllSegments, selectOnlyCurrentSegment, toggleCurrentSegmentSelected, invertSelectedSegments, removeSelectedSegments, setDeselectedSegmentIds, onSelectSegmentsByLabel, onSelectSegmentsByExpr, toggleSegmentSelected, selectOnlySegment, getApparentCutSegmentById, selectedSegments, selectedSegmentsOrInverse, nonFilteredSegmentsOrInverse, segmentsToExport, duplicateCurrentSegment, duplicateSegment, updateSegAtIndex,
-  } = useSegments({ filePath, workingRef, setWorking, setProgress, videoStream: activeVideoStream, duration, getRelevantTime, maxLabelLength, checkFileOpened, invertCutSegments, segmentsToChaptersOnly, timecodePlaceholder, parseTimecode });
+  } = useSegments({ filePath, workingRef, setWorking, setProgress, videoStream: activeVideoStream, duration, getRelevantTime, maxLabelLength, checkFileOpened, invertCutSegments, segmentsToChaptersOnly, timecodePlaceholder, parseTimecode, appendFfmpegCommandLog });
 
   const { getEdlFilePath, getEdlFilePathOld, projectFileSavePath, getProjectFileSavePath } = useSegmentsAutoSave({ autoSaveProjectFile, storeProjectInWorkingDir, filePath, customOutDir, cutSegments });
 
@@ -373,8 +375,6 @@ function App() {
   const jumpCutEnd = useCallback(() => jumpSegEnd(currentSegIndexSafe), [currentSegIndexSafe, jumpSegEnd]);
   const jumpTimelineStart = useCallback(() => seekAbs(0), [seekAbs]);
   const jumpTimelineEnd = useCallback(() => seekAbs(durationSafe), [durationSafe, seekAbs]);
-
-  const { captureFrameFromTag, captureFrameFromFfmpeg, captureFramesRange } = useFrameCapture({ formatTimecode, treatOutputFileModifiedTimeAsStart });
 
   // const getSafeCutTime = useCallback((cutTime, next) => ffmpeg.getSafeCutTime(neighbouringFrames, cutTime, next), [neighbouringFrames]);
 
@@ -596,8 +596,10 @@ function App() {
   const needSmartCut = !!(areWeCutting && enableSmartCut);
 
   const {
-    concatFiles, html5ifyDummy, cutMultiple, autoConcatCutSegments, html5ify, fixInvalidDuration,
-  } = useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, treatOutputFileModifiedTimeAsStart, needSmartCut, enableOverwriteOutput, outputPlaybackRate, cutFromAdjustmentFrames, appendLastCommandsLog, smartCutCustomBitrate: smartCutBitrate });
+    concatFiles, html5ifyDummy, cutMultiple, autoConcatCutSegments, html5ify, fixInvalidDuration, extractStreams,
+  } = useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, treatOutputFileModifiedTimeAsStart, needSmartCut, enableOverwriteOutput, outputPlaybackRate, cutFromAdjustmentFrames, appendLastCommandsLog, smartCutCustomBitrate: smartCutBitrate, appendFfmpegCommandLog });
+
+  const { captureFrameFromTag, captureFrameFromFfmpeg, captureFramesRange } = useFrameCapture({ appendFfmpegCommandLog, formatTimecode, treatOutputFileModifiedTimeAsStart });
 
   const html5ifyAndLoad = useCallback(async (cod: string | undefined, fp: string, speed: Html5ifyMode, hv: boolean, ha: boolean) => {
     const usesDummyVideo = speed === 'fastest';
@@ -674,9 +676,9 @@ function App() {
     }
   }, [batchFiles, customOutDir, ensureWritableOutDir, html5ify, setWorking, workingRef]);
 
-  const getConvertToSupportedFormat = useCallback((fallback) => rememberConvertToSupportedFormat || fallback, [rememberConvertToSupportedFormat]);
+  const getConvertToSupportedFormat = useCallback((fallback: Html5ifyMode) => rememberConvertToSupportedFormat || fallback, [rememberConvertToSupportedFormat]);
 
-  const html5ifyAndLoadWithPreferences = useCallback(async (cod, fp, speed, hv, ha) => {
+  const html5ifyAndLoadWithPreferences = useCallback(async (cod: string | undefined, fp: string, speed: Html5ifyMode, hv: boolean, ha: boolean) => {
     if (!enableAutoHtml5ify) return;
     setWorking({ text: i18n.t('Converting to supported format') });
     await html5ifyAndLoad(cod, fp, getConvertToSupportedFormat(speed), hv, ha);
@@ -1083,7 +1085,7 @@ function App() {
         try {
           setProgress(undefined); // If extracting extra streams takes a long time, prevent loader from being stuck at 100%
           setWorking({ text: i18n.t('Extracting {{count}} unprocessable tracks', { count: nonCopiedExtraStreams.length }) });
-          await extractStreams({ filePath, customOutDir, streams: nonCopiedExtraStreams, enableOverwriteOutput });
+          await extractStreams({ customOutDir, streams: nonCopiedExtraStreams });
           notices.push(i18n.t('Unprocessable streams were exported as separate files.'));
         } catch (err) {
           console.error('Extra stream export failed', err);
@@ -1130,7 +1132,7 @@ function App() {
       setWorking(undefined);
       setProgress(undefined);
     }
-  }, [filePath, numStreamsToCopy, segmentsToExport, haveInvalidSegs, workingRef, setWorking, segmentsToChaptersOnly, outSegTemplateOrDefault, generateOutSegFileNames, cutMultiple, outputDir, customOutDir, fileFormat, duration, isRotationSet, effectiveRotation, copyFileStreams, allFilesMeta, keyframeCut, shortestFlag, ffmpegExperimental, preserveMetadata, preserveMetadataOnMerge, preserveMovData, preserveChapters, movFastStart, avoidNegativeTs, customTagsByFile, paramsByStreamId, detectedFps, willMerge, enableOverwriteOutput, exportConfirmEnabled, mainFileFormatData, mainStreams, exportExtraStreams, areWeCutting, hideAllNotifications, cleanupChoices.cleanupAfterExport, cleanupFilesWithDialog, selectedSegmentsOrInverse, t, mergedFileTemplateOrDefault, segmentsToChapters, invertCutSegments, generateMergedFileNames, autoConcatCutSegments, autoDeleteMergedSegments, nonCopiedExtraStreams, showOsNotification, handleExportFailed]);
+  }, [filePath, numStreamsToCopy, segmentsToExport, haveInvalidSegs, workingRef, setWorking, segmentsToChaptersOnly, outSegTemplateOrDefault, generateOutSegFileNames, cutMultiple, outputDir, customOutDir, fileFormat, duration, isRotationSet, effectiveRotation, copyFileStreams, allFilesMeta, keyframeCut, shortestFlag, ffmpegExperimental, preserveMetadata, preserveMetadataOnMerge, preserveMovData, preserveChapters, movFastStart, avoidNegativeTs, customTagsByFile, paramsByStreamId, detectedFps, willMerge, enableOverwriteOutput, exportConfirmEnabled, mainFileFormatData, mainStreams, exportExtraStreams, areWeCutting, hideAllNotifications, cleanupChoices.cleanupAfterExport, cleanupFilesWithDialog, selectedSegmentsOrInverse, t, mergedFileTemplateOrDefault, segmentsToChapters, invertCutSegments, generateMergedFileNames, autoConcatCutSegments, autoDeleteMergedSegments, nonCopiedExtraStreams, extractStreams, showOsNotification, handleExportFailed]);
 
   const onExportPress = useCallback(async () => {
     if (!filePath) return;
@@ -1264,7 +1266,7 @@ function App() {
         if (await tryOpenProjectPath(getEdlFilePathOld(fp, cod), 'csv')) return;
 
         // OK, we didn't find a project file, instead maybe try to create project (segments) from chapters
-        const edl = await tryMapChaptersToEdl(chapters);
+        const edl = tryMapChaptersToEdl(chapters);
         if (edl.length > 0 && enableAskForImportChapters && (await askForImportChapters())) {
           console.log('Convert chapters to segments', edl);
           loadCutSegments(edl);
@@ -1329,7 +1331,7 @@ function App() {
 
       // BEGIN STATE UPDATES:
 
-      console.log('loadMedia', fp, cod, projectPath);
+      console.log('loadMedia', { filePath: fp, customOutDir: cod, projectPath });
 
       resetState();
 
@@ -1531,7 +1533,7 @@ function App() {
     try {
       setWorking({ text: i18n.t('Extracting all streams') });
       setStreamsSelectorShown(false);
-      const [firstExtractedPath] = await extractStreams({ customOutDir, filePath, streams: mainCopiedStreams, enableOverwriteOutput });
+      const [firstExtractedPath] = await extractStreams({ customOutDir, streams: mainCopiedStreams });
       if (!hideAllNotifications && firstExtractedPath != null) {
         showOsNotification(i18n.t('All tracks have been extracted'));
         openDirToast({ icon: 'success', filePath: firstExtractedPath, text: i18n.t('All streams have been extracted as separate files') });
@@ -1548,7 +1550,7 @@ function App() {
     } finally {
       setWorking(undefined);
     }
-  }, [customOutDir, enableOverwriteOutput, filePath, hideAllNotifications, mainCopiedStreams, setWorking, showOsNotification, workingRef]);
+  }, [customOutDir, extractStreams, filePath, hideAllNotifications, mainCopiedStreams, setWorking, showOsNotification, workingRef]);
 
   const userHtml5ifyCurrentFile = useCallback(async ({ ignoreRememberedValue }: { ignoreRememberedValue?: boolean } = {}) => {
     if (!filePath) return;
@@ -2101,7 +2103,7 @@ function App() {
     try {
       setWorking({ text: i18n.t('Extracting track') });
       // setStreamsSelectorShown(false);
-      const [firstExtractedPath] = await extractStreams({ customOutDir, filePath, streams: mainStreams.filter((s) => s.index === index), enableOverwriteOutput });
+      const [firstExtractedPath] = await extractStreams({ customOutDir, streams: mainStreams.filter((s) => s.index === index) });
       if (!hideAllNotifications && firstExtractedPath != null) {
         showOsNotification(i18n.t('Track has been extracted'));
         openDirToast({ icon: 'success', filePath: firstExtractedPath, text: i18n.t('Track has been extracted') });
@@ -2118,7 +2120,7 @@ function App() {
     } finally {
       setWorking(undefined);
     }
-  }, [customOutDir, enableOverwriteOutput, filePath, hideAllNotifications, mainStreams, setWorking, showOsNotification, workingRef]);
+  }, [customOutDir, extractStreams, filePath, hideAllNotifications, mainStreams, setWorking, showOsNotification, workingRef]);
 
   const batchFilePaths = useMemo(() => batchFiles.map((f) => f.path), [batchFiles]);
 
@@ -2279,7 +2281,7 @@ function App() {
       ev.preventDefault();
       if (!ev.dataTransfer) return;
       const { files } = ev.dataTransfer;
-      const filePaths = [...files].map((f) => f.path);
+      const filePaths = [...files].map((f) => electron.webUtils.getPathForFile(f));
 
       focusWindow();
 
@@ -2629,6 +2631,7 @@ function App() {
                 visible={lastCommandsVisible}
                 onTogglePress={toggleLastCommands}
                 ffmpegCommandLog={ffmpegCommandLog}
+                setFfmpegCommandLog={setFfmpegCommandLog}
               />
 
               <Sheet visible={settingsVisible} onClosePress={toggleSettings}>
