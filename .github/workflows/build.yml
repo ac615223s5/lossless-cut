@@ -2,8 +2,10 @@ name: Build/release
 
 on:
   push:
-    branches:
-      - master
+    tags:
+      - 'v*'
+  schedule:
+    - cron: '0 10 * * *'
   workflow_dispatch:
     inputs:
       tmate_enabled:
