@@ -10,7 +10,7 @@ import type { ICueSheet, ITrack } from 'cue-parser/lib/types';
 
 import { formatDuration } from './util/duration';
 import { invertSegments, sortSegments } from './segments';
-import { GetFrameCount, Segment, SegmentBase } from './types';
+import { GetFrameCount, SegmentBase } from './types';
 import parseCmx3600 from './cmx3600';
 
 export const getTimeFromFrameNum = (detectedFps: number, frameNum: number) => frameNum / detectedFps;
@@ -53,13 +53,13 @@ export async function parseCsv(csvStr: string, parseTimeFn: (a: string) => numbe
 
   const mapped = rows
     .map(([start, end, name]) => ({
-      start: parseTimeFn(start),
+      start: parseTimeFn(start) ?? 0,
       end: parseTimeFn(end),
       name: name.trim(),
     }));
 
   if (!mapped.every(({ start, end }) => (
-    (start === undefined || !Number.isNaN(start))
+    !Number.isNaN(start)
     && (end === undefined || !Number.isNaN(end))
   ))) {
     console.log(mapped);
@@ -209,34 +209,19 @@ export function parseCuesheet(cuesheet: ICueSheet) {
     const nextTrack = tracks![i + 1];
     const end = nextTrack && getTime(nextTrack);
 
-    return { name: track.title, start: getTime(track), end, tags: { performer: track.performer, title: track.title } };
+    return { name: track.title, start: getTime(track) ?? 0, end, tags: { performer: track.performer, title: track.title } };
   });
 }
 
-// See https://github.com/mifi/lossless-cut/issues/993#issuecomment-1037090403
+// See https://github.com/mifi/lossless-cut/issues/993
 export function parsePbf(buf: Buffer) {
   const text = buf.toString('utf16le');
-  const bookmarks = text.split('\n').map((line) => {
+
+  return text.split('\n').flatMap((line) => {
     const match = line.match(/^\d+=(\d+)\*([^*]+)*([^*]+)?/);
-    if (match) return { time: parseInt(match[1]!, 10) / 1000, name: match[2] };
-    return undefined;
-  }).filter(Boolean);
-
-  const out: Segment[] = [];
-
-  for (let i = 0; i < bookmarks.length;) {
-    const bookmark = bookmarks[i]!;
-    const nextBookmark = bookmarks[i + 1];
-    if (!nextBookmark) {
-      out.push({ start: bookmark.time, end: undefined, name: bookmark.name });
-      i += 1;
-    } else {
-      out.push({ start: bookmark.time, end: nextBookmark && nextBookmark.time, name: bookmark.name });
-      i += nextBookmark.name === ' ' ? 2 : 1;
-    }
-  }
-
-  return out;
+    if (match) return [{ start: parseInt(match[1]!, 10) / 1000, name: match[2] }];
+    return [];
+  });
 }
 
 // https://developer.apple.com/library/archive/documentation/AppleApplications/Reference/FinalCutPro_XML/VersionsoftheInterchangeFormat/VersionsoftheInterchangeFormat.html
@@ -316,7 +301,7 @@ export function parseYouTube(str: string) {
   return edl.filter((ed) => ed.start !== ed.end);
 }
 
-export function formatYouTube(segments: Segment[]) {
+export function formatYouTube(segments: { start: number, name?: string }[]) {
   return segments.map((segment) => {
     const timeStr = formatDuration({ seconds: segment.start, showFraction: false, shorten: true });
     const namePart = segment.name ? ` ${segment.name}` : '';
@@ -327,13 +312,13 @@ export function formatYouTube(segments: Segment[]) {
 // because null/undefined is also valid values (start/end of timeline)
 const safeFormatDuration = (duration: number | undefined) => (duration != null ? formatDuration({ seconds: duration }) : '');
 
-export const formatSegmentsTimes = (cutSegments: Segment[]) => cutSegments.map(({ start, end, name }) => [
+export const formatSegmentsTimes = (cutSegments: SegmentBase[]) => cutSegments.map(({ start, end, name }) => [
   safeFormatDuration(start),
   safeFormatDuration(end),
   name,
 ]);
 
-export async function formatCsvFrames({ cutSegments, getFrameCount }: { cutSegments: Segment[], getFrameCount: GetFrameCount }) {
+export async function formatCsvFrames({ cutSegments, getFrameCount }: { cutSegments: SegmentBase[], getFrameCount: GetFrameCount }) {
   const safeFormatFrameCount = (seconds: number | undefined) => (seconds != null ? getFrameCount(seconds) : '');
 
   const formatted = cutSegments.map(({ start, end, name }) => [
@@ -345,16 +330,16 @@ export async function formatCsvFrames({ cutSegments, getFrameCount }: { cutSegme
   return csvStringify(formatted);
 }
 
-export async function formatCsvSeconds(cutSegments: Segment[]) {
+export async function formatCsvSeconds(cutSegments: SegmentBase[]) {
   const rows = cutSegments.map(({ start, end, name }) => [start, end, name]);
   return csvStringify(rows);
 }
 
-export async function formatCsvHuman(cutSegments: Segment[]) {
+export async function formatCsvHuman(cutSegments: SegmentBase[]) {
   return csvStringify(formatSegmentsTimes(cutSegments));
 }
 
-export async function formatTsv(cutSegments: Segment[]) {
+export async function formatTsv(cutSegments: SegmentBase[]) {
   return csvStringify(formatSegmentsTimes(cutSegments), { delimiter: '\t' });
 }
 
@@ -445,7 +430,7 @@ export function parseSrtToSegments(text: string) {
   }));
 }
 
-export function formatSrt(segments: Segment[]) {
+export function formatSrt(segments: SegmentBase[]) {
   return segments.reduce((acc, segment, index) => `${acc}${index > 0 ? '\r\n' : ''}${index + 1}\r\n${formatDuration({ seconds: segment.start }).replaceAll('.', ',')} --> ${formatDuration({ seconds: segment.end }).replaceAll('.', ',')}\r\n${segment.name || '-'}\r\n`, '');
 }
 

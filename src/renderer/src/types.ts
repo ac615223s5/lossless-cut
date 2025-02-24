@@ -10,23 +10,6 @@ export interface ChromiumHTMLAudioElement extends HTMLAudioElement {
   audioTracks?: { id: string, enabled: boolean }[]
 }
 
-
-export interface SegmentBase {
-  start?: number | undefined,
-  end?: number | undefined,
-}
-
-export interface SegmentColorIndex {
-  segColorIndex: number,
-}
-
-export interface ApparentSegmentBase {
-  start: number,
-  end: number,
-}
-
-export interface ApparentSegmentWithColorIndex extends ApparentSegmentBase, SegmentColorIndex {}
-
 export const openFilesActionArgsSchema = z.tuple([z.string().array()]);
 export type OpenFilesActionArgs = z.infer<typeof openFilesActionArgsSchema>
 
@@ -39,19 +22,44 @@ export type SegmentTags = z.infer<typeof segmentTagsSchema>
 
 export type EditingSegmentTags = Record<string, SegmentTags>
 
-export interface StateSegment extends SegmentBase, SegmentColorIndex {
-  name: string;
-  segId: string;
-  tags?: SegmentTags | undefined;
-}
+// todo remove some time in the future
+export const llcProjectV1Schema = z.object({
+  version: z.literal(1),
+  mediaFileName: z.string().optional(),
+  cutSegments: z.object({
+    start: z.number().optional(),
+    end: z.number().optional(),
+    name: z.string(),
+    tags: segmentTagsSchema.optional(),
+  }).array(),
+});
 
-export interface Segment extends SegmentBase {
+export const llcProjectV2Schema = z.object({
+  version: z.literal(2),
+  mediaFileName: z.string().optional(),
+  cutSegments: z.object({
+    start: z.number(),
+    end: z.number().optional(),
+    name: z.string(),
+    tags: segmentTagsSchema.optional(),
+  }).array(),
+});
+
+export type LlcProject = z.infer<typeof llcProjectV2Schema>
+
+export interface SegmentBase {
+  start: number,
+  end?: number | undefined,
   name?: string | undefined,
 }
 
-export interface ApparentCutSegment extends ApparentSegmentWithColorIndex {
+export interface SegmentColorIndex {
+  segColorIndex: number,
+}
+
+export interface StateSegment extends SegmentBase, SegmentColorIndex {
   name: string;
-  segId: string,
+  segId: string;
   tags?: SegmentTags | undefined;
 }
 
@@ -59,7 +67,6 @@ export interface SegmentToExport {
   start: number,
   end: number,
   name?: string | undefined;
-  segId?: string | undefined;
   tags?: SegmentTags | undefined;
 }
 
@@ -136,3 +143,8 @@ export interface StreamParams {
   bsfHevcMp4toannexb?: boolean,
 }
 export type ParamsByStreamId = Map<string, Map<number, StreamParams>>;
+
+export interface BatchFile {
+  path: string,
+  name: string,
+}

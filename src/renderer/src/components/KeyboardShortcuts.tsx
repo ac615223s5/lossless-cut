@@ -351,16 +351,32 @@ const KeyboardShortcuts = memo(({
         name: t('Jump to previous segment'),
         category: segmentsAndCutpointsCategory,
       },
+      jumpSeekPrevSegment: {
+        name: t('Jump & seek to previous segment'),
+        category: segmentsAndCutpointsCategory,
+      },
       jumpNextSegment: {
         name: t('Jump to next segment'),
+        category: segmentsAndCutpointsCategory,
+      },
+      jumpSeekNextSegment: {
+        name: t('Jump & seek to next segment'),
         category: segmentsAndCutpointsCategory,
       },
       jumpFirstSegment: {
         name: t('Jump to first segment'),
         category: segmentsAndCutpointsCategory,
       },
+      jumpSeekFirstSegment: {
+        name: t('Jump & seek to first segment'),
+        category: segmentsAndCutpointsCategory,
+      },
       jumpLastSegment: {
         name: t('Jump to last segment'),
+        category: segmentsAndCutpointsCategory,
+      },
+      jumpSeekLastSegment: {
+        name: t('Jump & seek to last segment'),
         category: segmentsAndCutpointsCategory,
       },
       reorderSegsByStartTime: {
@@ -393,6 +409,10 @@ const KeyboardShortcuts = memo(({
       },
       createNumSegments: {
         name: t('Create num segments'),
+        category: segmentsAndCutpointsCategory,
+      },
+      createFixedByteSizedSegments: {
+        name: t('Create byte sized segments'),
         category: segmentsAndCutpointsCategory,
       },
       createRandomSegments: {
@@ -440,6 +460,10 @@ const KeyboardShortcuts = memo(({
       },
       selectAllSegments: {
         name: t('Select all segments'),
+        category: segmentsAndCutpointsCategory,
+      },
+      selectAllMarkers: {
+        name: t('Select all markers'),
         category: segmentsAndCutpointsCategory,
       },
       toggleCurrentSegmentSelected: {
@@ -698,7 +722,7 @@ const KeyboardShortcuts = memo(({
 
   const categoriesWithActions = useMemo(() => Object.entries(groupBy(actionEntries, ([, { category }]) => category)), [actionEntries]);
 
-  const onDeleteBindingClick = useCallback(({ action, keys }) => {
+  const onDeleteBindingClick = useCallback(({ action, keys }: { action: KeyboardAction, keys: string }) => {
     // eslint-disable-next-line no-alert
     if (!window.confirm(t('Are you sure?'))) return;
 

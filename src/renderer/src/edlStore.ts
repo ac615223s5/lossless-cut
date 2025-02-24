@@ -1,11 +1,12 @@
 import JSON5 from 'json5';
 import i18n from 'i18next';
 import invariant from 'tiny-invariant';
+import { ZodError } from 'zod';
 
 import { parseSrtToSegments, formatSrt, parseCuesheet, parseXmeml, parseFcpXml, parseCsv, parseCutlist, parsePbf, parseEdl, formatCsvHuman, formatTsv, formatCsvFrames, formatCsvSeconds, parseCsvTime, getFrameValParser, parseDvAnalyzerSummaryTxt } from './edlFormats';
 import { askForYouTubeInput, showOpenDialog } from './dialogs';
 import { getOutPath } from './util';
-import { EdlExportType, EdlFileType, EdlImportType, GetFrameCount, Segment, StateSegment } from './types';
+import { EdlExportType, EdlFileType, EdlImportType, GetFrameCount, LlcProject, llcProjectV1Schema, llcProjectV2Schema, SegmentBase, StateSegment } from './types';
 
 const { readFile, writeFile } = window.require('fs/promises');
 const cueParser = window.require('cue-parser');
@@ -54,27 +55,27 @@ async function loadSrt(path: string) {
   return parseSrtToSegments(await readFile(path, 'utf8'));
 }
 
-export async function saveCsv(path: string, cutSegments: Segment[]) {
+export async function saveCsv(path: string, cutSegments: SegmentBase[]) {
   await writeFile(path, await formatCsvSeconds(cutSegments));
 }
 
-export async function saveCsvHuman(path: string, cutSegments: Segment[]) {
+export async function saveCsvHuman(path: string, cutSegments: SegmentBase[]) {
   await writeFile(path, await formatCsvHuman(cutSegments));
 }
 
 export async function saveCsvFrames({ path, cutSegments, getFrameCount }: {
   path: string,
-  cutSegments: Segment[],
+  cutSegments: SegmentBase[],
   getFrameCount: GetFrameCount,
 }) {
   await writeFile(path, await formatCsvFrames({ cutSegments, getFrameCount }));
 }
 
-export async function saveTsv(path: string, cutSegments: Segment[]) {
+export async function saveTsv(path: string, cutSegments: SegmentBase[]) {
   await writeFile(path, await formatTsv(cutSegments));
 }
 
-export async function saveSrt(path: string, cutSegments: Segment[]) {
+export async function saveSrt(path: string, cutSegments: SegmentBase[]) {
   await writeFile(path, formatSrt(cutSegments));
 }
 
@@ -84,25 +85,35 @@ export async function saveLlcProject({ savePath, filePath, cutSegments }: {
   cutSegments: StateSegment[],
 }) {
   const projectData = {
-    version: 1,
+    version: 2,
     mediaFileName: basename(filePath),
     cutSegments: cutSegments.map(({ start, end, name, tags }) => ({ start, end, name, tags })),
   };
   await writeFile(savePath, JSON5.stringify(projectData, null, 2));
 }
 
-export async function loadLlcProject(path: string) {
-  const parsed = JSON5.parse(await readFile(path, 'utf8')) as unknown;
-  if (parsed == null || typeof parsed !== 'object') throw new Error('Invalid LLC file');
-  let mediaFileName: string | undefined;
-  if ('mediaFileName' in parsed && typeof parsed.mediaFileName === 'string') {
-    mediaFileName = parsed.mediaFileName;
+export async function loadLlcProject(path: string): Promise<LlcProject> {
+  const json = JSON5.parse(await readFile(path, 'utf8'));
+
+  // todo probably remove migration in future
+  try {
+    return llcProjectV2Schema.parse(json);
+  } catch (err) {
+    if (err instanceof ZodError) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { cutSegments, version: _ignored, ...restProject } = llcProjectV1Schema.parse(json);
+      console.log('Converting v1 project to v2');
+      return {
+        ...restProject,
+        version: 2,
+        cutSegments: cutSegments.map(({ start, ...restSeg }) => ({
+          ...restSeg,
+          start: start ?? 0, // v1 allowed undefined for "start"
+        })),
+      };
+    }
+    throw err;
   }
-  if (!('cutSegments' in parsed) || !Array.isArray(parsed.cutSegments)) throw new Error('Invalid LLC file');
-  return {
-    mediaFileName,
-    cutSegments: parsed.cutSegments as StateSegment[], // todo validate more
-  };
 }
 
 export async function readEdlFile({ type, path, fps }: { type: EdlFileType, path: string, fps: number | undefined }) {
@@ -141,7 +152,11 @@ export async function askForEdlImport({ type, fps }: { type: EdlImportType, fps?
   else if (type === 'srt') filters = [{ name: i18n.t('Subtitles (SRT)'), extensions: ['srt'] }];
   else if (type === 'llc') filters = [{ name: i18n.t('LosslessCut project'), extensions: ['llc'] }];
 
-  const { canceled, filePaths } = await showOpenDialog({ properties: ['openFile'], filters, title: i18n.t('Import project') });
+  const { canceled, filePaths } = await showOpenDialog({
+    properties: ['openFile'],
+    title: i18n.t('Import project'),
+    ...(filters && { filters }),
+  });
   const [firstFilePath] = filePaths;
   if (canceled || firstFilePath == null) return [];
   return readEdlFile({ type, path: firstFilePath, fps });

@@ -6,6 +6,7 @@ import SyntaxHighlighter from 'react-syntax-highlighter';
 import { tomorrow as lightSyntaxStyle, tomorrowNight as darkSyntaxStyle } from 'react-syntax-highlighter/dist/esm/styles/hljs';
 import JSON5 from 'json5';
 import type { SweetAlertOptions } from 'sweetalert2';
+import invariant from 'tiny-invariant';
 
 import { formatDuration } from '../util/duration';
 import Swal, { ReactSwal, swalToastOptions, toast } from '../swal';
@@ -13,7 +14,7 @@ import { parseYouTube } from '../edlFormats';
 import CopyClipboardButton from '../components/CopyClipboardButton';
 import Checkbox from '../components/Checkbox';
 import { isWindows, showItemInFolder } from '../util';
-import { ParseTimecode, SegmentBase } from '../types';
+import { ParseTimecode } from '../types';
 import { FindKeyframeMode } from '../ffmpeg';
 
 const remote = window.require('@electron/remote');
@@ -221,20 +222,20 @@ async function askForNumSegments() {
   return parseInt(value, 10);
 }
 
-export async function createNumSegments(fileDuration) {
+export async function createNumSegments(fileDuration: number) {
   const numSegments = await askForNumSegments();
   if (numSegments == null) return undefined;
-  const edl: SegmentBase[] = [];
+  const edl: { start: number, end: number }[] = [];
   const segDuration = fileDuration / numSegments;
   for (let i = 0; i < numSegments; i += 1) {
-    edl.push({ start: i * segDuration, end: i === numSegments - 1 ? undefined : (i + 1) * segDuration });
+    edl.push({ start: i * segDuration, end: i === numSegments - 1 ? fileDuration : (i + 1) * segDuration });
   }
   return edl;
 }
 
 const exampleDuration = '00:00:05.123';
 
-async function askForSegmentDuration({ fileDuration, inputPlaceholder, parseTimecode }: {
+export async function askForSegmentDuration({ fileDuration, inputPlaceholder, parseTimecode }: {
   fileDuration: number, inputPlaceholder: string, parseTimecode: ParseTimecode,
 }) {
   const { value } = await Swal.fire({
@@ -259,17 +260,17 @@ async function askForSegmentDuration({ fileDuration, inputPlaceholder, parseTime
 
 // https://github.com/mifi/lossless-cut/issues/1153
 async function askForSegmentsRandomDurationRange() {
-  function parse(str) {
+  function parse(str: string) {
     // eslint-disable-next-line unicorn/better-regex
     const match = str.replaceAll(/\s/g, '').match(/^duration([\d.]+)to([\d.]+),gap([-\d.]+)to([-\d.]+)$/i);
     if (!match) return undefined;
     const values = match.slice(1);
     const parsed = values.map((val) => parseFloat(val));
 
-    const durationMin = parsed[0];
-    const durationMax = parsed[1];
-    const gapMin = parsed[2];
-    const gapMax = parsed[3];
+    const durationMin = parsed[0]!;
+    const durationMax = parsed[1]!;
+    const gapMin = parsed[2]!;
+    const gapMax = parsed[3]!;
 
     if (!(parsed.every((val) => !Number.isNaN(val)) && durationMin <= durationMax && gapMin <= gapMax && durationMin > 0)) return undefined;
     return { durationMin, durationMax, gapMin, gapMax };
@@ -306,7 +307,7 @@ async function askForSegmentsStartOrEnd(text: string) {
   });
   if (!value) return undefined;
 
-  return value === 'both' ? ['start', 'end'] : [value];
+  return value === 'both' ? ['start', 'end'] as const : [value as 'start' | 'end'] as const;
 }
 
 export async function askForShiftSegments({ inputPlaceholder, parseTimecode }: { inputPlaceholder: string, parseTimecode: ParseTimecode }) {
@@ -338,6 +339,7 @@ export async function askForShiftSegments({ inputPlaceholder, parseTimecode }: {
 
   if (value == null) return undefined;
   const parsed = parseValue(value);
+  invariant(parsed != null);
 
   const startOrEnd = await askForSegmentsStartOrEnd(i18n.t('Do you want to shift the start or end timestamp by {{time}}?', { time: formatDuration({ seconds: parsed, shorten: true }) }));
   if (startOrEnd == null) return undefined;
@@ -466,18 +468,43 @@ export async function showCleanupFilesDialog(cleanupChoicesIn: CleanupChoicesTyp
   return undefined;
 }
 
-export async function createFixedDurationSegments({ fileDuration, inputPlaceholder, parseTimecode }: {
-  fileDuration: number, inputPlaceholder: string, parseTimecode: ParseTimecode,
-}) {
-  const segmentDuration = await askForSegmentDuration({ fileDuration, inputPlaceholder, parseTimecode });
-  if (segmentDuration == null) return undefined;
-  const edl: SegmentBase[] = [];
-  for (let start = 0; start < fileDuration; start += segmentDuration) {
-    const end = start + segmentDuration;
-    edl.push({ start, end: end >= fileDuration ? undefined : end });
-  }
-  return edl;
+function parseBytesHuman(str: string) {
+  const match = str.replaceAll(/\s/g, '').match(/^(\d+)([gkmt]?)b$/i);
+  if (!match) return undefined;
+  const size = parseInt(match[1]!, 10);
+  const unit = match[2]!.toLowerCase();
+  if (unit === 't') return size * 1024 * 1024 * 1024 * 1024;
+  if (unit === 'g') return size * 1024 * 1024 * 1024;
+  if (unit === 'm') return size * 1024 * 1024;
+  if (unit === 'k') return size * 1024;
+  return size;
 }
+
+export async function createFixedByteSixedSegments({ fileDuration, fileSize }: {
+  fileDuration: number, fileSize: number,
+}) {
+  const example = '100 MB';
+  const { value } = await Swal.fire({
+    input: 'text',
+    showCancelButton: true,
+    inputValue: example,
+    inputPlaceholder: example,
+    text: i18n.t('Divide timeline into a number of segments with an approximate byte size'),
+    inputValidator: (v) => {
+      const bytes = parseBytesHuman(v);
+      if (bytes != null) return undefined;
+      return i18n.t('Please input a valid size. Example: {{example}}', { example });
+    },
+  });
+
+  if (value == null) return undefined;
+
+  const parsed = parseBytesHuman(value);
+  invariant(parsed != null);
+
+  return fileDuration * (parsed / fileSize);
+}
+
 
 export async function createRandomSegments(fileDuration: number) {
   const response = await askForSegmentsRandomDurationRange();
@@ -487,7 +514,7 @@ export async function createRandomSegments(fileDuration: number) {
 
   const randomInRange = (min: number, max: number) => min + Math.random() * (max - min);
 
-  const edl: SegmentBase[] = [];
+  const edl: { start: number, end: number }[] = [];
   for (let start = randomInRange(gapMin, gapMax); start < fileDuration && edl.length < maxSegments; start += randomInRange(gapMin, gapMax)) {
     const end = Math.min(fileDuration, start + randomInRange(durationMin, durationMax));
     edl.push({ start, end });
@@ -568,7 +595,7 @@ export async function labelSegmentDialog({ currentName, maxLength }: { currentNa
     title: i18n.t('Label current segment'),
     inputValue: currentName,
     input: currentName.includes('\n') ? 'textarea' : 'text',
-    inputValidator: (v) => (v.length > maxLength ? `${i18n.t('Max length')} ${maxLength}` : null),
+    inputValidator: (v: string) => (v.length > maxLength ? `${i18n.t('Max length')} ${maxLength}` : null),
   });
   return value;
 }
@@ -631,6 +658,7 @@ export async function selectSegmentsByExprDialog(inputValidator: (v: string) => 
       label: { name: i18n.t('Segment label (exact)'), code: "segment.label === 'My label'" },
       regexp: { name: i18n.t('Segment label (regexp)'), code: '/^My label/.test(segment.label)' },
       tag: { name: i18n.t('Segment tag value'), code: "segment.tags.myTag === 'tag value'" },
+      markers: { name: i18n.t('Markers'), code: 'segment.end == null' },
     },
     title: i18n.t('Select segments by expression'),
     description: <Trans>Enter a JavaScript expression which will be evaluated for each segment. Segments for which the expression evaluates to &quot;true&quot; will be selected. <button type="button" className="link-button" onClick={() => shell.openExternal('https://github.com/mifi/lossless-cut/blob/master/expressions.md')}>View available syntax.</button></Trans>,
@@ -648,6 +676,8 @@ export async function mutateSegmentsByExprDialog(inputValidator: (v: string) => 
       // eslint-disable-next-line no-template-curly-in-string
       addNumToLabel: { name: i18n.t('Add number suffix to label'), code: '{ label: `${segment.label} ${segment.index + 1}` }' },
       tagEven: { name: i18n.t('Add a tag to every even segment'), code: '{ tags: (segment.index + 1) % 2 === 0 ? { ...segment.tags, even: \'true\' } : segment.tags }' },
+      segmentsToMarkers: { name: i18n.t('Convert segments to markers'), code: '{ end: undefined }' },
+      markersToSegments: { name: i18n.t('Convert markers to segments'), code: '{ ...(segment.end == null && { end: segment.start + 5 }) }' },
     },
     title: i18n.t('Edit segments by expression'),
     description: <Trans>Enter a JavaScript expression which will be evaluated for each selected segment. Returned properties will be edited. <button type="button" className="link-button" onClick={() => shell.openExternal('https://github.com/mifi/lossless-cut/blob/master/expressions.md')}>View available syntax.</button></Trans>,
@@ -686,7 +716,7 @@ export async function openDirToast({ filePath, text, html, ...props }: SweetAler
   if (value) showItemInFolder(filePath);
 }
 
-const UnorderedList = ({ children }) => (
+const UnorderedList = ({ children }: { children: ReactNode }) => (
   <ul style={{ paddingLeft: '1em' }}>{children}</ul>
 );
 const ListItem = ({ icon: Icon, iconColor, children, style }: { icon: IconComponent, iconColor?: string, children: ReactNode, style?: CSSProperties }) => (
@@ -737,7 +767,7 @@ export async function openConcatFinishedToast({ filePath, warnings, notices }: {
   await openDirToast({ filePath, html, width: 800, position: 'center', timer: 30000 });
 }
 
-export async function askForPlaybackRate({ detectedFps, outputPlaybackRate }) {
+export async function askForPlaybackRate({ detectedFps, outputPlaybackRate }: { detectedFps: number | undefined, outputPlaybackRate: number }) {
   const fps = detectedFps || 1;
   const currentFps = fps * outputPlaybackRate;
 

@@ -5,11 +5,11 @@ import { ffmpegExtractWindow } from '../util/constants';
 import { RenderableWaveform } from '../types';
 
 
-function BigWaveform({ waveforms, relevantTime, playing, durationSafe, zoom, seekRel, darkMode }: {
+function BigWaveform({ waveforms, relevantTime, playing, fileDurationNonZero, zoom, seekRel, darkMode }: {
   waveforms: RenderableWaveform[],
   relevantTime: number,
   playing: boolean,
-  durationSafe: number,
+  fileDurationNonZero: number,
   zoom: number,
   seekRel: (a: number) => void,
   darkMode: boolean,
@@ -25,13 +25,13 @@ function BigWaveform({ waveforms, relevantTime, playing, durationSafe, zoom, see
 
   const smoothTime = smoothTimeRaw ?? relevantTime;
 
-  const mouseDownRef = useRef<{ relevantTime: number, x }>();
+  const mouseDownRef = useRef<{ relevantTime: number, x: number }>();
   const containerRef = useRef<HTMLDivElement>(null);
 
   const getRect = useCallback(() => containerRef.current!.getBoundingClientRect(), []);
 
-  const handleMouseDown = useCallback((e) => {
-    const rect = e.target.getBoundingClientRect();
+  const handleMouseDown = useCallback<MouseEventHandler<HTMLDivElement>>((e) => {
+    const rect = (e.target as HTMLDivElement).getBoundingClientRect();
     const x = e.clientX - rect.left;
 
     mouseDownRef.current = { relevantTime, x };
@@ -105,7 +105,7 @@ function BigWaveform({ waveforms, relevantTime, playing, durationSafe, zoom, see
           width: widthPercent,
           left: leftPercent,
           borderLeft: waveform.from === 0 ? '1px solid var(--gray11)' : undefined,
-          borderRight: waveform.to >= durationSafe ? '1px solid var(--gray11)' : undefined,
+          borderRight: waveform.to >= fileDurationNonZero ? '1px solid var(--gray11)' : undefined,
           filter: darkMode ? undefined : 'invert(1)',
         };
 
