@@ -365,14 +365,16 @@ function useSegments({ filePath, workingRef, setWorking, setProgress, videoStrea
           const time = newSegment[key];
           invariant(filePath != null);
           if (time != null) {
-          let keyframe = await findKeyframeNearTime({ filePath, streamIndex: videoStream.index, time, mode });
-          if (keyframe === null) {
-            if (mode !== 'keyframeCutFix') {
-              throw new Error(`Cannot find any keyframe within 60 seconds of frame ${time}`);
+            let keyframe = await findKeyframeNearTime({ filePath, streamIndex: videoStream.index, time, mode });
+            if (keyframe === undefined) {
+              if (mode !== 'keyframeCutFix') {
+                throw new Error(`Cannot find any keyframe within 60 seconds of frame ${time}`);
+              }
+              keyframe = fileDuration;
+              console.log(2,time,keyframe);
             }
-            keyframe = fileDuration;
+            newSegment[key] = keyframe;
           }
-          newSegment[key] = keyframe;
         }
         if (startOrEnd.includes('start')) {
           if (mode === 'keyframeCutFix') {
