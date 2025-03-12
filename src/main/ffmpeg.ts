@@ -173,17 +173,32 @@ export async function runFfprobe(args: readonly string[], { timeout = isDev ? 10
   }
 }
 
-export async function renderWaveformPng({ filePath, start, duration, color, streamIndex }: {
-  filePath: string, start: number, duration: number, color: string, streamIndex: number,
+export async function renderWaveformPng({ filePath, start, duration, resample, color, streamIndex, timeout }: {
+  filePath: string,
+  start?: number,
+  duration?: number,
+  resample?: number,
+  color: string,
+  streamIndex: number,
+  timeout?: number,
 }): Promise<Waveform> {
   const args1 = [
     '-hide_banner',
     '-i', filePath,
-    '-ss', String(start),
-    '-t', String(duration),
-    '-c', 'copy',
     '-vn',
     '-map', `0:${streamIndex}`,
+    ...(start != null ? ['-ss', String(start)] : []),
+    ...(duration != null ? ['-t', String(duration)] : []),
+    ...(resample != null ? [
+      // the operation is faster if we resample
+      // the higher the resample rate, the faster the resample
+      // but the slower the showwavespic operation will be...
+      // https://github.com/mifi/lossless-cut/issues/260#issuecomment-605603456
+      '-c:a', 'pcm_s32le',
+      '-ar', String(resample),
+    ] : [
+      '-c', 'copy',
+    ]),
     '-f', 'matroska', // mpegts doesn't support vorbis etc
     '-',
   ];
@@ -198,36 +213,25 @@ export async function renderWaveformPng({ filePath, start, duration, color, stre
     '-',
   ];
 
-  logger.info(`${getFfCommandLine('ffmpeg1', args1)} | \n${getFfCommandLine('ffmpeg2', args2)}`);
+  logger.info(`${getFfCommandLine('ffmpeg', args1)} | \n${getFfCommandLine('ffmpeg', args2)}`);
 
   let ps1: ResultPromise<{ encoding: 'buffer' }> | undefined;
   let ps2: ResultPromise<{ encoding: 'buffer' }> | undefined;
   try {
-    ps1 = runFfmpegProcess(args1, { buffer: false }, { logCli: false });
-    ps2 = runFfmpegProcess(args2, undefined, { logCli: false });
+    ps1 = runFfmpegProcess(args1, { buffer: false, ...(timeout != null && { timeout }) }, { logCli: false });
+    ps2 = runFfmpegProcess(args2, timeout != null ? { timeout } : undefined, { logCli: false });
     assert(ps1.stdout != null);
     assert(ps2.stdin != null);
     ps1.stdout.pipe(ps2.stdin);
 
-    const timer = setTimeout(() => {
-      ps1?.kill();
-      ps2?.kill();
-      logger.warn('ffmpeg timed out');
-    }, 10000);
-
-    let stdout;
-    try {
-      ({ stdout } = await ps2);
-    } finally {
-      clearTimeout(timer);
-    }
+    const { stdout } = await ps2;
 
     return {
       buffer: Buffer.from(stdout),
     };
   } catch (err) {
-    if (ps1) ps1.kill();
-    if (ps2) ps2.kill();
+    ps1?.kill();
+    ps2?.kill();
     throw err;
   }
 }
