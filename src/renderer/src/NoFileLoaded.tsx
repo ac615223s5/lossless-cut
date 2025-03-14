@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { Fragment, memo, useMemo } from 'react';
 
 import { useTranslation, Trans } from 'react-i18next';
 
@@ -6,17 +6,29 @@ import SetCutpointButton from './components/SetCutpointButton';
 import SimpleModeButton from './components/SimpleModeButton';
 import useUserSettings from './hooks/useUserSettings';
 import { StateSegment } from './types';
+import { KeyBinding, KeyboardAction } from '../../../types';
+import { splitKeyboardKeys } from './util';
 
 const electron = window.require('electron');
 
-function NoFileLoaded({ mifiLink, currentCutSeg, onClick, darkMode }: {
+function Keys({ keys }: { keys: string }) {
+  const split = splitKeyboardKeys(keys);
+  return split.map((key, i) => (
+    <Fragment key={key}><kbd>{key.toUpperCase()}</kbd>{i < split.length - 1 && <span style={{ fontSize: '.7em', marginLeft: '-.2em', marginRight: '-.2em' }}>{' + '}</span>}</Fragment>
+  ));
+}
+
+function NoFileLoaded({ mifiLink, currentCutSeg, onClick, darkMode, keyBindingByAction }: {
   mifiLink: unknown,
-  currentCutSeg: StateSegment,
+  currentCutSeg: StateSegment | undefined,
   onClick: () => void,
   darkMode?: boolean,
+  keyBindingByAction: Record<KeyboardAction, KeyBinding>,
 }) {
   const { t } = useTranslation();
   const { simpleMode } = useUserSettings();
+
+  const currentCutSegOrDefault = useMemo(() => currentCutSeg ?? { segColorIndex: 0 }, [currentCutSeg]);
 
   return (
     <div
@@ -32,7 +44,7 @@ function NoFileLoaded({ mifiLink, currentCutSeg, onClick, darkMode }: {
       </div>
 
       <div style={{ fontSize: '1.3em', color: 'var(--gray11)' }}>
-        <Trans><SetCutpointButton currentCutSeg={currentCutSeg} side="start" style={{ verticalAlign: 'middle' }} /> <SetCutpointButton currentCutSeg={currentCutSeg} side="end" style={{ verticalAlign: 'middle' }} /> or <kbd>I</kbd> <kbd>O</kbd> to set cutpoints</Trans>
+        <Trans><SetCutpointButton currentCutSeg={currentCutSegOrDefault} side="start" style={{ verticalAlign: 'middle' }} /> <SetCutpointButton currentCutSeg={currentCutSegOrDefault} side="end" style={{ verticalAlign: 'middle' }} /> or <Keys keys={keyBindingByAction.setCutStart.keys} /> <Keys keys={keyBindingByAction.setCutEnd.keys} /> to set cutpoints</Trans>
       </div>
 
       <div style={{ fontSize: '1.3em', color: 'var(--gray11)' }} role="button" onClick={(e) => e.stopPropagation()}>

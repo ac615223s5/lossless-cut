@@ -15,11 +15,13 @@ import { getModifier } from '../hooks/useTimelineScroll';
 import { KeyBinding, KeyboardAction, ModifierKey } from '../../../../types';
 import { StateSegment } from '../types';
 import Sheet from './Sheet';
+import { splitKeyboardKeys } from '../util';
 
 
 type Category = string;
 
 type ActionsMap = Record<KeyboardAction, { name: string, category?: Category, before?: ReactNode }>;
+
 
 const renderKeys = (keys: string[]) => keys.map((key, i) => (
   <Fragment key={key}>
@@ -138,7 +140,10 @@ function WheelModifier({ text, wheelText, modifier }: { text: string, wheelText:
 const KeyboardShortcuts = memo(({
   keyBindings, setKeyBindings, resetKeyBindings, currentCutSeg,
 }: {
-  keyBindings: KeyBinding[], setKeyBindings: Dispatch<SetStateAction<KeyBinding[]>>, resetKeyBindings: () => void, currentCutSeg: StateSegment,
+  keyBindings: KeyBinding[],
+  setKeyBindings: Dispatch<SetStateAction<KeyBinding[]>>,
+  resetKeyBindings: () => void,
+  currentCutSeg: StateSegment | undefined,
 }) => {
   const { t } = useTranslation();
 
@@ -311,6 +316,10 @@ const KeyboardShortcuts = memo(({
       // segmentsAndCutpointsCategory
       addSegment: {
         name: t('Add cut segment'),
+        category: segmentsAndCutpointsCategory,
+      },
+      removeCurrentCutpoint: {
+        name: t('Remove current segment cutpoint'),
         category: segmentsAndCutpointsCategory,
       },
       removeCurrentSegment: {
@@ -806,7 +815,7 @@ const KeyboardShortcuts = memo(({
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
                     {bindingsForThisAction.map(({ keys }) => (
                       <div key={keys} style={{ display: 'flex', alignItems: 'center' }}>
-                        {renderKeys(keys.split('+'))}
+                        {renderKeys(splitKeyboardKeys(keys))}
 
                         <IconButton title={t('Remove key binding')} appearance="minimal" intent="danger" icon={DeleteIcon} onClick={() => onDeleteBindingClick({ action, keys })} />
                       </div>
@@ -835,7 +844,12 @@ const KeyboardShortcuts = memo(({
 function KeyboardShortcutsDialog({
   isShown, onHide, keyBindings, setKeyBindings, resetKeyBindings, currentCutSeg,
 }: {
-  isShown: boolean, onHide: () => void, keyBindings: KeyBinding[], setKeyBindings: Dispatch<SetStateAction<KeyBinding[]>>, resetKeyBindings: () => void, currentCutSeg: StateSegment,
+  isShown: boolean,
+  onHide: () => void,
+  keyBindings: KeyBinding[],
+  setKeyBindings: Dispatch<SetStateAction<KeyBinding[]>>,
+  resetKeyBindings: () => void,
+  currentCutSeg: StateSegment | undefined,
 }) {
   const { t } = useTranslation();
 

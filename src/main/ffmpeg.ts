@@ -547,17 +547,42 @@ export function readOneJpegFrame({ path, seekTo, videoStreamIndex }: { path: str
 const enableLog = false;
 const encode = true;
 
-export function createMediaSourceProcess({ path, videoStreamIndex, audioStreamIndex, seekTo, size, fps }: {
-  path: string, videoStreamIndex?: number | undefined, audioStreamIndex?: number | undefined, seekTo: number, size?: number | undefined, fps?: number | undefined,
+export function createMediaSourceProcess({ path, videoStreamIndex, audioStreamIndexes, seekTo, size, fps }: {
+  path: string,
+  videoStreamIndex?: number | undefined,
+  audioStreamIndexes: number[],
+  seekTo: number,
+  size?: number | undefined,
+  fps?: number | undefined,
 }) {
-  function getVideoFilters() {
-    if (videoStreamIndex == null) return [];
+  function getFilters() {
+    const graph: string[] = [];
 
-    const filters: string[] = [];
-    if (fps != null) filters.push(`fps=${fps}`);
-    if (size != null) filters.push(`scale=${size}:${size}:flags=lanczos:force_original_aspect_ratio=decrease`);
-    if (filters.length === 0) return [];
-    return ['-vf', filters.join(',')];
+    if (videoStreamIndex != null) {
+      const videoFilters: string[] = [];
+      if (fps != null) videoFilters.push(`fps=${fps}`);
+      if (size != null) videoFilters.push(`scale=${size}:${size}:flags=lanczos:force_original_aspect_ratio=decrease:force_divisible_by=2`);
+      const videoFiltersStr = videoFilters.length > 0 ? videoFilters.join(',') : 'null';
+      graph.push(`[0:${videoStreamIndex}]${videoFiltersStr}[video]`);
+    }
+
+    if (audioStreamIndexes.length > 0) {
+      if (audioStreamIndexes.length > 1) {
+        const resampledStr = audioStreamIndexes.map((i) => `[resampled${i}]`).join('');
+        const weightsStr = audioStreamIndexes.map(() => '1').join(' ');
+        graph.push(
+          // First resample because else we get the lowest sample rate
+          ...audioStreamIndexes.map((i) => `[0:${i}]aresample=44100[resampled${i}]`),
+          // now mix all audio channels together
+          `${resampledStr}amix=inputs=${audioStreamIndexes.length}:duration=longest:weights=${weightsStr}:normalize=0:dropout_transition=2[audio]`,
+        );
+      } else {
+        graph.push(`[0:${audioStreamIndexes[0]}]anull[audio]`);
+      }
+    }
+
+    if (graph.length === 0) return [];
+    return ['-filter_complex', graph.join(';')];
   }
 
   // https://stackoverflow.com/questions/16658873/how-to-minimize-the-delay-in-a-live-streaming-with-ffmpeg
@@ -572,29 +597,27 @@ export function createMediaSourceProcess({ path, videoStreamIndex, audioStreamIn
     // '-flags', 'low_delay', // this seems to ironically give a *higher* delay
     '-flush_packets', '1',
 
-    '-vsync', 'passthrough',
-
     '-ss', String(seekTo),
 
     '-noautorotate',
 
     '-i', path,
 
-    ...(videoStreamIndex != null ? ['-map', `0:${videoStreamIndex}`] : ['-vn']),
-
-    ...(audioStreamIndex != null ? ['-map', `0:${audioStreamIndex}`] : ['-an']),
+    '-fps_mode', 'passthrough',
 
     ...(encode ? [
-      ...(videoStreamIndex != null ? [
-        ...getVideoFilters(),
+      ...getFilters(),
 
+      ...(videoStreamIndex != null ? [
+        '-map', '[video]',
         '-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-crf', '10',
         '-g', '1', // reduces latency and buffering
-      ] : []),
+      ] : ['-vn']),
 
-      ...(audioStreamIndex != null ? [
+      ...(audioStreamIndexes.length > 0 ? [
+        '-map', '[audio]',
         '-ac', '2', '-c:a', 'aac', '-b:a', '128k',
-      ] : []),
+      ] : ['-an']),
 
       // May alternatively use webm/vp8 https://stackoverflow.com/questions/24152810/encoding-ffmpeg-to-mpeg-dash-or-webm-with-keyframe-clusters-for-mediasource
     ] : [

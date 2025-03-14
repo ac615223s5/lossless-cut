@@ -17,7 +17,6 @@ import { timelineBackground, darkModeTransition } from './colors';
 import { Frame } from './ffmpeg';
 import { FormatTimecode, InverseCutSegment, OverviewWaveform, RenderableWaveform, WaveformSlice, StateSegment, Thumbnail } from './types';
 import Button from './components/Button';
-import { WaveformMode } from '../../../types';
 
 
 type CalculateTimelinePercent = (time: number) => string | undefined;
@@ -49,16 +48,16 @@ const Waveform = memo(({ waveform, calculateTimelinePercent, fileDurationNonZero
 });
 
 // eslint-disable-next-line react/display-name
-const Waveforms = memo(({ calculateTimelinePercent, fileDurationNonZero, waveforms, overviewWaveform, zoom, darkMode, waveformMode }: {
+const Waveforms = memo(({ calculateTimelinePercent, fileDurationNonZero, waveforms, overviewWaveform, zoom, darkMode, height }: {
   calculateTimelinePercent: CalculateTimelinePercent,
   fileDurationNonZero: number,
   waveforms: WaveformSlice[],
   overviewWaveform: OverviewWaveform | undefined,
   zoom: number,
   darkMode: boolean,
-  waveformMode: WaveformMode | undefined,
+  height: number,
 }) => (
-  <div style={{ height: waveformMode === 'waveform-tall' ? '15vh' : 40, width: `${zoom * 100}%`, position: 'relative' }}>
+  <div style={{ height, width: `${zoom * 100}%`, position: 'relative' }}>
     {zoom === 1 && overviewWaveform != null ? (
       <Waveform waveform={overviewWaveform} calculateTimelinePercent={calculateTimelinePercent} fileDurationNonZero={fileDurationNonZero} darkMode={darkMode} />
     ) : waveforms.map((waveform) => (
@@ -108,15 +107,14 @@ function Timeline({
   zoomWindowEndTime,
   onZoomWindowStartTimeChange,
   onGenerateOverviewWaveformClick,
-  waveformMode,
   waveformEnabled,
+  waveformHeight,
   showThumbnails,
   playing,
   isFileOpened,
   onWheel,
   commandedTimeRef,
   goToTimecode,
-  isSegmentSelected,
   darkMode,
 } : {
   fileDurationNonZero: number,
@@ -142,15 +140,14 @@ function Timeline({
   zoomWindowEndTime: number | undefined,
   onZoomWindowStartTimeChange: (a: number) => void,
   onGenerateOverviewWaveformClick: () => void,
-  waveformMode: WaveformMode | undefined,
   waveformEnabled: boolean,
+  waveformHeight: number,
   showThumbnails: boolean,
   playing: boolean,
   isFileOpened: boolean,
   onWheel: WheelEventHandler,
   commandedTimeRef: MutableRefObject<number>,
   goToTimecode: () => void,
-  isSegmentSelected: (a: { segId: string }) => boolean,
   darkMode: boolean,
 }) {
   const { t } = useTranslation();
@@ -375,7 +372,7 @@ function Timeline({
             overviewWaveform={overviewWaveform}
             zoom={zoom}
             darkMode={darkMode}
-            waveformMode={waveformMode}
+            height={waveformHeight}
           />
         )}
 
@@ -397,8 +394,18 @@ function Timeline({
           style={{ height: timelineHeight, width: `${zoom * 100}%`, position: 'relative', backgroundColor: timelineBackground, transition: darkModeTransition }}
           ref={timelineWrapperRef}
         >
+          {inverseCutSegments.map((seg) => (
+            <BetweenSegments
+              key={seg.segId}
+              start={seg.start}
+              end={seg.end}
+              fileDurationNonZero={fileDurationNonZero}
+              invertCutSegments={invertCutSegments}
+            />
+          ))}
+
           {cutSegments.map((seg, i) => {
-            const selected = invertCutSegments || isSegmentSelected({ segId: seg.segId });
+            const selected = invertCutSegments || seg.selected;
 
             return (
               <TimelineSeg
@@ -414,16 +421,6 @@ function Timeline({
               />
             );
           })}
-
-          {inverseCutSegments.map((seg) => (
-            <BetweenSegments
-              key={seg.segId}
-              start={seg.start}
-              end={seg.end}
-              fileDurationNonZero={fileDurationNonZero}
-              invertCutSegments={invertCutSegments}
-            />
-          ))}
 
           {shouldShowKeyframes && !areKeyframesTooClose && keyFramesInZoomWindow.map((f) => (
             <div key={f.time} style={{ position: 'absolute', top: 0, bottom: 0, left: `${(f.time / fileDurationNonZero) * 100}%`, marginLeft: -1, width: 1, background: 'var(--gray11)', pointerEvents: 'none' }} />
