@@ -159,14 +159,20 @@ const Segment = memo(({
   }, 300, [isActive]);
 
   function renderNumber() {
-    if (invertCutSegments || !('segColorIndex' in seg)) return <FaSave style={{ color: saveColor, marginRight: 5, verticalAlign: 'middle' }} size={14} />;
+    if (invertCutSegments || !('segColorIndex' in seg)) {
+      return <FaSave style={{ color: saveColor, marginRight: 5, verticalAlign: 'middle' }} size={14} />;
+    }
 
     const segColor = getSegColor(seg);
 
     const color = segColor.desaturate(0.25).lightness(darkMode ? 35 : 55);
     const borderColor = darkMode ? color.lighten(0.5) : color.darken(0.3);
 
-    return <b style={{ cursor: 'grab', color: 'white', padding: '0 4px', marginRight: 3, marginLeft: -3, background: color.string(), border: `1px solid ${isActive ? borderColor.string() : 'transparent'}`, borderRadius: 10, fontSize: 12 }}>{index + 1}</b>;
+    return (
+      <b style={{ cursor: 'grab', color: 'white', padding: '0 4px', marginRight: 3, marginLeft: -3, background: color.string(), border: `1px solid ${isActive ? borderColor.string() : 'transparent'}`, borderRadius: 10, fontSize: 12 }}>
+        {index + 1}
+      </b>
+    );
   }
 
   const onDoubleClick = useCallback(() => {
@@ -247,7 +253,7 @@ function SegmentList({
   onRemoveSelected,
   onLabelSegment,
   currentCutSeg,
-  segmentAtCursor,
+  firstSegmentAtCursor,
   toggleSegmentsList,
   splitCurrentSegment,
   selectedSegments,
@@ -287,7 +293,7 @@ function SegmentList({
   onRemoveSelected: UseSegments['removeSelectedSegments'],
   onLabelSegment: UseSegments['labelSegment'],
   currentCutSeg: UseSegments['currentCutSeg'],
-  segmentAtCursor: StateSegment | undefined,
+  firstSegmentAtCursor: StateSegment | undefined,
   toggleSegmentsList: () => void,
   splitCurrentSegment: UseSegments['splitCurrentSegment'],
   selectedSegments: DefiniteSegmentBase[],
@@ -320,10 +326,9 @@ function SegmentList({
 
   const getButtonColor = useCallback((seg: StateSegment | undefined, next?: boolean) => getSegColor(seg ? { segColorIndex: next ? seg.segColorIndex + 1 : seg.segColorIndex } : undefined).desaturate(0.3).lightness(darkMode ? 45 : 55).string(), [darkMode, getSegColor]);
   const currentSegColor = useMemo(() => getButtonColor(currentCutSeg), [currentCutSeg, getButtonColor]);
-  const segAtCursorColor = useMemo(() => getButtonColor(segmentAtCursor), [getButtonColor, segmentAtCursor]);
+  const segAtCursorColor = useMemo(() => getButtonColor(firstSegmentAtCursor), [getButtonColor, firstSegmentAtCursor]);
 
   const segmentsTotal = useMemo(() => selectedSegments.reduce((acc, seg) => (seg.end == null ? 0 : seg.end - seg.start) + acc, 0), [selectedSegments]);
-
 
   const segmentsOrInverse: (InverseCutSegment | StateSegment)[] = invertCutSegments ? inverseCutSegments : cutSegments;
 
@@ -405,7 +410,7 @@ function SegmentList({
             size={22}
             title={t('Split segment at cursor')}
             role="button"
-            style={{ ...buttonBaseStyle, padding: 1, ...(segmentAtCursor ? { backgroundColor: segAtCursorColor } : disabledButtonStyle) }}
+            style={{ ...buttonBaseStyle, padding: 1, ...(firstSegmentAtCursor ? { backgroundColor: segAtCursorColor } : disabledButtonStyle) }}
             onClick={splitCurrentSegment}
           />
 

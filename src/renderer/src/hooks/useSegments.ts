@@ -106,7 +106,10 @@ function useSegments({ filePath, workingRef, setWorking, setProgress, videoStrea
     safeSetCutSegments([]);
   }, [clearSegColorCounter, safeSetCutSegments]);
 
-  const shuffleSegments = useCallback(() => safeSetCutSegments((oldSegments) => shuffleArray(oldSegments)), [safeSetCutSegments]);
+  const shuffleSegments = useCallback(() => safeSetCutSegments((existingSegments) => [
+    ...existingSegments.filter((s) => !s.selected),
+    ...shuffleArray(existingSegments.filter((s) => s.selected)),
+  ]), [safeSetCutSegments]);
 
   // todo combine with safeSetCutSegments?
   const loadCutSegments = useCallback((edl: SegmentBase[], append: boolean) => {
@@ -173,7 +176,7 @@ function useSegments({ filePath, workingRef, setWorking, setProgress, videoStrea
     return { start, end };
   }, [currentCutSeg, fileDurationNonZero]);
 
-  const selectedSegmentsRaw = useMemo(() => cutSegments.filter((segment) => segment.selected), [cutSegments]);
+  const selectedSegments = useMemo(() => cutSegments.flatMap((segment, i) => (segment.selected ? [{ ...segment, originalIndex: i }] : [])), [cutSegments]);
 
   const getFfmpegParameters = useCallback((key: FfmpegDialog) => {
     const parameters = ffmpegParameters[key];
@@ -272,10 +275,8 @@ function useSegments({ filePath, workingRef, setWorking, setProgress, videoStrea
     });
   }, [cutSegments, fileDuration, haveInvalidSegs]);
 
-  // If user has selected none, default to all instead.
-  const selectedSegments = useMemo(() => (selectedSegmentsRaw.length > 0 ? selectedSegmentsRaw : cutSegments), [cutSegments, selectedSegmentsRaw]);
-
   const invertAllSegments = useCallback(() => {
+    // todo leave non selected segments as is?
     // treat markers as 0 length
     const sortedSegments = sortSegments(selectedSegments.map(({ end, ...rest }) => ({ ...rest, end: end ?? rest.start })));
 
@@ -305,7 +306,10 @@ function useSegments({ filePath, workingRef, setWorking, setProgress, videoStrea
   }, [createIndexedSegment, fileDuration, selectedSegments, safeSetCutSegments]);
 
   const combineOverlappingSegments = useCallback(() => {
-    safeSetCutSegments((existingSegments) => combineOverlappingSegments2(existingSegments));
+    safeSetCutSegments((existingSegments) => [
+      ...existingSegments.filter((s) => !s.selected),
+      ...combineOverlappingSegments2(existingSegments.filter((s) => s.selected)), // only process selected
+    ]);
   }, [safeSetCutSegments]);
 
   const combineSelectedSegments = useCallback(() => {
@@ -545,6 +549,15 @@ function useSegments({ filePath, workingRef, setWorking, setProgress, videoStrea
     if (value != null) updateSegAtIndex(index, { name: value });
   }, [cutSegments, updateSegAtIndex, maxLabelLength]);
 
+  const selectSegments = useCallback((segmentsToSelect: { segId: string }[]) => {
+    const segIdsToSelect = new Set(segmentsToSelect.map(({ segId }) => segId));
+    if (segIdsToSelect.size === 0) return; // no point in selecting none
+    setCutSegments((existing) => existing.map(({ selected, ...segment }) => ({
+      ...segment,
+      selected: selected || segIdsToSelect.has(segment.segId),
+    })));
+  }, [setCutSegments]);
+
   const findSegmentsAtCursor = useCallback((currentTime: number) => (
     cutSegments.flatMap((segment, index) => {
       if (
@@ -563,6 +576,11 @@ function useSegments({ filePath, workingRef, setWorking, setProgress, videoStrea
     if (firstSegmentAtCursorIndex == null) return;
     setCurrentSegIndex(firstSegmentAtCursorIndex);
   }, [findSegmentsAtCursor, getRelevantTime]);
+
+  const selectSegmentsAtCursor = useCallback(() => {
+    const relevantTime = getRelevantTime();
+    selectSegments(findSegmentsAtCursor(relevantTime).flatMap((index) => (cutSegments[index] ? [cutSegments[index]] : [])));
+  }, [cutSegments, findSegmentsAtCursor, getRelevantTime, selectSegments]);
 
   const splitCurrentSegment = useCallback(() => {
     const relevantTime = getRelevantTime();
@@ -617,15 +635,6 @@ function useSegments({ filePath, workingRef, setWorking, setProgress, videoStrea
     const segments = await createRandomSegmentsDialog(fileDuration);
     if (segments) loadCutSegments(segments, true);
   }, [checkFileOpened, fileDuration, loadCutSegments]);
-
-  const selectSegments = useCallback((segmentsToSelect: { segId: string }[]) => {
-    const segIdsToSelect = new Set(segmentsToSelect.map(({ segId }) => segId));
-    if (segIdsToSelect.size === 0) return; // no point in selecting none
-    setCutSegments((existing) => existing.map(({ selected, ...segment }) => ({
-      ...segment,
-      selected: selected || segIdsToSelect.has(segment.segId),
-    })));
-  }, [setCutSegments]);
 
   const selectSegmentsByLabel = useCallback(async () => {
     const value = await selectSegmentsByLabelDialog(currentCutSeg?.name);
@@ -715,16 +724,16 @@ function useSegments({ filePath, workingRef, setWorking, setProgress, videoStrea
   }, [cutSegments, getScopeSegment, safeSetCutSegments]);
 
   const labelSelectedSegments = useCallback(async () => {
-    const firstSelectedSegment = selectedSegmentsRaw[0];
+    const firstSelectedSegment = selectedSegments[0];
     if (firstSelectedSegment == null) return;
     const { name } = firstSelectedSegment;
     const value = await labelSegmentDialog({ currentName: name, maxLength: maxLabelLength });
     if (value == null) return;
     safeSetCutSegments((existingSegments) => existingSegments.map((existingSegment) => {
-      if (selectedSegmentsRaw.some((seg) => seg.segId === existingSegment.segId)) return { ...existingSegment, name: value };
-      return existingSegment;
+      if (!existingSegment.selected) return existingSegment;
+      return { ...existingSegment, name: value };
     }));
-  }, [maxLabelLength, selectedSegmentsRaw, safeSetCutSegments]);
+  }, [maxLabelLength, selectedSegments, safeSetCutSegments]);
 
   const maybeCreateFullLengthSegment = useCallback((newFileDuration: number) => {
     // don't use safeSetCutSegments because we want to set initial: true
@@ -736,32 +745,39 @@ function useSegments({ filePath, workingRef, setWorking, setProgress, videoStrea
     });
   }, [createIndexedSegment, setCutSegments]);
 
-  const segmentsOrInverse = useMemo<{ selected: DefiniteSegmentBase[], all: DefiniteSegmentBase[] }>(() => {
+  const segmentsOrInverse = useMemo<{ selected: SegmentToExport[], all: DefiniteSegmentBase[] }>(() => {
     // For invertCutSegments we do not support filtering (selecting) segments
     if (invertCutSegments) {
       return {
-        selected: inverseCutSegments,
+        selected: inverseCutSegments.map((seg, i) => ({ ...seg, originalIndex: i })),
         all: inverseCutSegments,
       };
     }
 
+    const nonMarkers = filterNonMarkers(selectedSegments);
+
+    // If user has selected no segments, default to all instead.
+    const selectedSegmentsWithFallback = nonMarkers.length > 0 ? nonMarkers : filterNonMarkers(cutSegments).map((seg, i) => ({ ...seg, originalIndex: i }));
+
     return {
       // exclude markers (segments without any end)
       // and exclude the initial segment, to prevent cutting when not really needed (if duration changes after the segment was created)
-      selected: filterNonMarkers(selectedSegments).filter((seg) => !seg.initial),
+      selected: selectedSegmentsWithFallback.filter((seg) => !seg.initial),
+
       // `all` includes also all non selected segments:
       all: filterNonMarkers(cutSegments).filter((seg) => !seg.initial),
     };
   }, [cutSegments, inverseCutSegments, invertCutSegments, selectedSegments]);
 
   const segmentsToExport = useMemo<SegmentToExport[]>(() => {
-    // segmentsToChaptersOnly is a special mode where all segments will be simply written out as chapters to one file: https://github.com/mifi/lossless-cut/issues/993#issuecomment-1037927595
-    // Chapters export mode: Emulate a single segment with no cuts (full timeline)
+    // 'segmentsToChaptersOnly' is a special mode where all segments will be simply written out as chapters to one file: https://github.com/mifi/lossless-cut/issues/993#issuecomment-1037927595
+    // Chapters export mode: Emulate no cuts (full timeline)
     if (segmentsToChaptersOnly) return [];
+    // in other modes, return all selected segments
     return segmentsOrInverse.selected;
   }, [segmentsOrInverse.selected, segmentsToChaptersOnly]);
 
-  const removeSelectedSegments = useCallback(() => removeSegments(selectedSegmentsRaw.map((seg) => seg.segId)), [removeSegments, selectedSegmentsRaw]);
+  const removeSelectedSegments = useCallback(() => removeSegments(selectedSegments.map((seg) => seg.segId)), [removeSegments, selectedSegments]);
 
   const selectOnlySegment = useCallback((seg: Pick<StateSegment, 'segId'>) => setCutSegments((existing) => existing.map((segment) => ({
     ...segment, selected: segment.segId === seg.segId,
@@ -812,6 +828,7 @@ function useSegments({ filePath, workingRef, setWorking, setProgress, videoStrea
     labelSegment,
     splitCurrentSegment,
     focusSegmentAtCursor,
+    selectSegmentsAtCursor,
     createNumSegments,
     createFixedDurationSegments,
     createFixedByteSizedSegments,
