@@ -218,10 +218,16 @@ function App() {
     }
   }, [detectedFileFormat, outFormatLocked, setFileFormat, setOutFormatLocked]);
 
+  const previousPlaybackVolume = useRef(playbackVolume);
   const toggleMuted = useCallback(() => {
-    if (playbackVolume === 0) setPlaybackVolume(1);
-    if (playbackVolume === 1) setPlaybackVolume(0);
-  }, [playbackVolume, setPlaybackVolume]);
+    setPlaybackVolume((volume) => {
+      if (volume === 0) {
+        return previousPlaybackVolume.current || 1;
+      }
+      previousPlaybackVolume.current = volume;
+      return 0;
+    });
+  }, [setPlaybackVolume]);
 
   const toggleShowThumbnails = useCallback(() => setThumbnailsEnabled((v) => !v), []);
 
