@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, useCallback, useRef, useMemo, CSSProperties, ReactEventHandler, FocusEventHandler } from 'react';
+import { memo, useEffect, useState, useCallback, useRef, useMemo, CSSProperties, ReactEventHandler, FocusEventHandler, DragEventHandler } from 'react';
 import { FaAngleLeft, FaRegTimesCircle } from 'react-icons/fa';
 import { MdRotate90DegreesCcw } from 'react-icons/md';
 import { AnimatePresence } from 'framer-motion';
@@ -74,6 +74,7 @@ import {
   getDownloadMediaOutPath,
   isAbortedError,
   withErrorHandling,
+  shootConfetti,
 } from './util';
 import { toast, errorToast, showPlaybackFailedMessage } from './swal';
 import { adjustRate } from './util/rate-calculator';
@@ -643,7 +644,7 @@ function App() {
   }, [showNotification]);
 
   const areWeCutting = useMemo(() => segmentsToExport.some(({ start, end }) => isCuttingStart(start) || isCuttingEnd(end, fileDuration)), [fileDuration, segmentsToExport]);
-  const needSmartCut = !!(areWeCutting && enableSmartCut);
+  const needSmartCut = areWeCutting && enableSmartCut;
 
   const {
     concatFiles, html5ifyDummy, cutMultiple, concatCutSegments, html5ify, fixInvalidDuration, extractStreams, tryDeleteFiles,
@@ -1182,6 +1183,8 @@ function App() {
         openExportFinishedToast({ filePath: revealPath, warnings, notices });
       }
 
+      shootConfetti({ ticks: 50 });
+
       if (cleanupChoices.cleanupAfterExport) await cleanupFilesWithDialog();
 
       setExportCount((c) => c + 1);
@@ -1230,19 +1233,26 @@ function App() {
 
   const captureSnapshot = useCallback(async () => {
     if (!filePath) return;
+    if (workingRef.current) return;
+    try {
+      setWorking({ text: i18n.t('Exporting') });
 
-    await withErrorHandling(async () => {
-      const currentTime = getRelevantTime();
-      const video = videoRef.current;
-      if (video == null) throw new Error();
-      const usingFfmpeg = usingPreviewFile || captureFrameMethod === 'ffmpeg';
-      const outPath = usingFfmpeg
-        ? await captureFrameFromFfmpeg({ customOutDir, filePath, time: currentTime, captureFormat, quality: captureFrameQuality })
-        : await captureFrameFromTag({ customOutDir, filePath, time: currentTime, captureFormat, quality: captureFrameQuality, video });
+      await withErrorHandling(async () => {
+        const currentTime = getRelevantTime();
+        const video = videoRef.current;
+        if (video == null) throw new Error();
+        const usingFfmpeg = usingPreviewFile || captureFrameMethod === 'ffmpeg';
+        const outPath = usingFfmpeg
+          ? await captureFrameFromFfmpeg({ customOutDir, filePath, time: currentTime, captureFormat, quality: captureFrameQuality })
+          : await captureFrameFromTag({ customOutDir, filePath, time: currentTime, captureFormat, quality: captureFrameQuality, video });
 
-      if (!hideAllNotifications) openDirToast({ icon: 'success', filePath: outPath, text: `${i18n.t('Screenshot captured to:')} ${outPath}` });
-    }, i18n.t('Failed to capture frame'));
-  }, [filePath, getRelevantTime, videoRef, usingPreviewFile, captureFrameMethod, captureFrameFromFfmpeg, customOutDir, captureFormat, captureFrameQuality, captureFrameFromTag, hideAllNotifications]);
+        shootConfetti();
+        if (!hideAllNotifications) openDirToast({ icon: 'success', filePath: outPath, text: `${i18n.t('Screenshot captured to:')} ${outPath}` });
+      }, i18n.t('Failed to capture frame'));
+    } finally {
+      setWorking(undefined);
+    }
+  }, [filePath, workingRef, setWorking, getRelevantTime, videoRef, usingPreviewFile, captureFrameMethod, captureFrameFromFfmpeg, customOutDir, captureFormat, captureFrameQuality, captureFrameFromTag, hideAllNotifications]);
 
   const extractSegmentsFramesAsImages = useCallback(async (segments: SegmentBase[]) => {
     if (!filePath || detectedFps == null || workingRef.current || segments.length === 0) return;
@@ -2392,15 +2402,29 @@ function App() {
     };
   }, [checkFileOpened, customOutDir, detectedFps, filePath, getFrameCount, getKeyboardAction, goToTimecodeDirect, importEdlFile, loadCutSegments, mainActions, promptDownloadMediaUrlWrapper, selectedSegments, toggleKeyboardShortcuts, tryExportEdlFile, userOpenFiles]);
 
+  const handleBatchFilesDrop = useCallback<DragEventHandler<HTMLDivElement>>((ev) => {
+    ev.preventDefault();
+    if (!ev.dataTransfer) return;
+    const filePaths = [...ev.dataTransfer.files].map((f) => electron.webUtils.getPathForFile(f));
+    focusWindow();
+    batchLoadPaths(filePaths, true);
+  }, [batchLoadPaths]);
+
+  const handleStreamSourceFileDrop = useCallback<DragEventHandler<HTMLDivElement>>((ev) => {
+    ev.preventDefault();
+    if (!ev.dataTransfer) return;
+    const filePaths = [...ev.dataTransfer.files].map((f) => electron.webUtils.getPathForFile(f));
+    if (filePaths.length !== 1) return;
+    focusWindow();
+    addStreamSourceFile(filePaths[0]!);
+  }, [addStreamSourceFile]);
+
   useEffect(() => {
     async function onDrop(ev: DragEvent) {
       ev.preventDefault();
       if (!ev.dataTransfer) return;
-      const { files } = ev.dataTransfer;
-      const filePaths = [...files].map((f) => electron.webUtils.getPathForFile(f));
-
+      const filePaths = [...ev.dataTransfer.files].map((f) => electron.webUtils.getPathForFile(f));
       focusWindow();
-
       userOpenFiles(filePaths);
     }
     const element = videoContainerRef.current;
@@ -2504,6 +2528,7 @@ function App() {
                       closeBatch={closeBatch}
                       onMergeFilesClick={concatBatch}
                       onBatchConvertToSupportedFormatClick={convertFormatBatch}
+                      onDrop={handleBatchFilesDrop}
                     />
                   )}
                 </AnimatePresence>
@@ -2748,6 +2773,7 @@ function App() {
                     toggleCopyStreamIds={toggleCopyStreamIds}
                     changeEnabledStreamsFilter={changeEnabledStreamsFilter}
                     toggleCopyAllStreamsForPath={toggleCopyAllStreamsForPath}
+                    onStreamSourceFileDrop={handleStreamSourceFileDrop}
                   />
                 )}
               </Sheet>
