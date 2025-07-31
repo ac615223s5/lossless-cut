@@ -790,6 +790,8 @@ export async function askForPlaybackRate({ detectedFps, outputPlaybackRate }: { 
   const currentFps = fps * outputPlaybackRate;
 
   function parseValue(v: string) {
+    if (v.trim() === '') return 1; // default to 1 if empty
+
     const newFps = parseFloat(v);
     if (!Number.isNaN(newFps)) {
       return newFps / fps;
@@ -797,7 +799,7 @@ export async function askForPlaybackRate({ detectedFps, outputPlaybackRate }: { 
     return undefined;
   }
 
-  const { value } = await Swal.fire({
+  const { value, isConfirmed } = await Swal.fire<string>({
     title: i18n.t('Change FPS'),
     input: 'text',
     inputValue: currentFps.toFixed(5),
@@ -810,7 +812,7 @@ export async function askForPlaybackRate({ detectedFps, outputPlaybackRate }: { 
     },
   });
 
-  if (!value) return undefined;
+  if (!isConfirmed || value == null) return undefined;
 
   return parseValue(value);
 }
