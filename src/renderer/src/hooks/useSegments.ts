@@ -892,6 +892,7 @@ function useSegments({ filePath, workingRef, setWorking, setProgress, videoStrea
     setCutTime,
     updateSegAtIndex,
     findSegmentsAtCursor,
+    currentCutSegOrWholeTimeline,
   };
 }
 
