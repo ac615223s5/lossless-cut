@@ -532,39 +532,17 @@ export async function getDuration(filePath: string) {
   return parseFloat((await readFormatData(filePath)).duration);
 }
 
-export function readOneJpegFrame({ path, seekTo, videoStreamIndex }: { path: string, seekTo: number, videoStreamIndex: number }) {
-  const args = [
-    '-hide_banner', '-loglevel', 'error',
-
-    '-ss', String(seekTo),
-
-    '-noautorotate',
-
-    '-i', path,
-
-    '-map', `0:${videoStreamIndex}`,
-    '-vcodec', 'mjpeg',
-
-    '-frames:v', '1',
-
-    '-f', 'image2pipe',
-    '-',
-  ];
-
-  // logger.info(getFfCommandLine('ffmpeg', args));
-  return runFfmpegProcess(args, undefined, { logCli: false });
-}
-
 const enableLog = false;
 const encode = true;
 
-export function createMediaSourceProcess({ path, videoStreamIndex, audioStreamIndexes, seekTo, size, fps }: {
+export function createMediaSourceProcess({ path, videoStreamIndex, audioStreamIndexes, seekTo, size, fps, rotate }: {
   path: string,
   videoStreamIndex?: number | undefined,
   audioStreamIndexes: number[],
   seekTo: number,
   size?: number | undefined,
   fps?: number | undefined,
+  rotate: number | undefined,
 }) {
   function getFilters() {
     const graph: string[] = [];
@@ -572,7 +550,29 @@ export function createMediaSourceProcess({ path, videoStreamIndex, audioStreamIn
     if (videoStreamIndex != null) {
       const videoFilters: string[] = [];
       if (fps != null) videoFilters.push(`fps=${fps}`);
-      if (size != null) videoFilters.push(`scale=${size}:${size}:flags=lanczos:force_original_aspect_ratio=decrease:force_divisible_by=2`);
+      const scaleFilterOptions: string[] = [];
+      if (size != null) scaleFilterOptions.push(`${size}:${size}:flags=lanczos:force_original_aspect_ratio=decrease:force_divisible_by=2`);
+
+      // we need to reduce the color space to bt709 for compatibility with most OS'es and hardware combinations
+      // especially because of this bug https://github.com/electron/electron/issues/47947
+      // see also https://www.reddit.com/r/ffmpeg/comments/jlk2zn/how_to_encode_using_bt709/
+      scaleFilterOptions.push('in_color_matrix=auto:in_range=auto:out_color_matrix=bt709:out_range=tv');
+      if (scaleFilterOptions.length > 0) videoFilters.push(`scale=${scaleFilterOptions.join(':')}`);
+
+      // alternatively we could have used `tonemap=hable` instead, but it's slower because it's an additional separate filter.
+      // videoFilters.push('tonemap=hable');
+      // the best would be to use zscale, but it's not yet available in our ffmpeg build, and I think it's slower.
+      // https://gist.github.com/goyuix/033d35846b05733d77f568b754e7c3ea
+      // https://superuser.com/questions/1732301/convert-10bit-hdr-video-to-8bit-frames/1732684#1732684
+
+      videoFilters.push(
+        // most compatible pixel format:
+        'format=yuv420p',
+
+        // setparams is always needed when converting hdr to sdr:
+        'setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709',
+      );
+
       const videoFiltersStr = videoFilters.length > 0 ? videoFilters.join(',') : 'null';
       graph.push(`[0:${videoStreamIndex}]${videoFiltersStr}[video]`);
     }
@@ -596,6 +596,13 @@ export function createMediaSourceProcess({ path, videoStreamIndex, audioStreamIn
     return ['-filter_complex', graph.join(';')];
   }
 
+  const videoEncodeArgs = [
+    'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-crf', '10',
+  ];
+
+  // const videoEncodeArgs = ['h264_videotoolbox', '-b:v', '5M']
+
+
   // https://stackoverflow.com/questions/16658873/how-to-minimize-the-delay-in-a-live-streaming-with-ffmpeg
   // https://unix.stackexchange.com/questions/25372/turn-off-buffering-in-pipe
   const args = [
@@ -610,18 +617,25 @@ export function createMediaSourceProcess({ path, videoStreamIndex, audioStreamIn
 
     '-ss', String(seekTo),
 
-    '-noautorotate',
+    ...(rotate != null ? [
+      '-display_rotation', '0',
+      '-noautorotate',
+    ] : []),
 
     '-i', path,
 
     '-fps_mode', 'passthrough',
+
+    '-map_metadata', '-1',
+    '-map_chapters', '-1',
 
     ...(encode ? [
       ...getFilters(),
 
       ...(videoStreamIndex != null ? [
         '-map', '[video]',
-        '-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-crf', '10',
+        '-c:v', ...videoEncodeArgs,
+
         '-g', '1', // reduces latency and buffering
       ] : ['-vn']),
 
@@ -638,7 +652,7 @@ export function createMediaSourceProcess({ path, videoStreamIndex, audioStreamIn
     '-f', 'mp4', '-movflags', '+frag_keyframe+empty_moov+default_base_moof', '-',
   ];
 
-  if (enableLog) logger.info(getFfCommandLine('ffmpeg', args));
+  logger.info(getFfCommandLine('ffmpeg', args));
 
   return execa(getFfmpegPath(), args, { encoding: 'buffer', buffer: false, stderr: enableLog ? 'inherit' : 'pipe' });
 }

@@ -1,21 +1,15 @@
-import assert from 'node:assert';
 import { ExecaError } from 'execa';
 
 import logger from './logger.js';
-import { createMediaSourceProcess, readOneJpegFrame as readOneJpegFrameRaw } from './ffmpeg.js';
+import { createMediaSourceProcess } from './ffmpeg.js';
 
 
-export function createMediaSourceStream({ path, videoStreamIndex, audioStreamIndexes, seekTo, size, fps }: {
-  path: string,
-  videoStreamIndex?: number | undefined,
-  audioStreamIndexes: number[],
-  seekTo: number,
-  size?: number | undefined,
-  fps?: number | undefined,
-}) {
+// eslint-disable-next-line import/prefer-default-export
+export function createMediaSourceStream(params: Parameters<typeof createMediaSourceProcess>[0]) {
   const abortController = new AbortController();
+  const { videoStreamIndex, audioStreamIndexes, seekTo } = params;
   logger.info('Starting preview process', { videoStreamIndex, audioStreamIndexes, seekTo });
-  const process = createMediaSourceProcess({ path, videoStreamIndex, audioStreamIndexes, seekTo, size, fps });
+  const process = createMediaSourceProcess(params);
 
   // eslint-disable-next-line unicorn/prefer-add-event-listener
   abortController.signal.onabort = () => {
@@ -24,7 +18,6 @@ export function createMediaSourceStream({ path, videoStreamIndex, audioStreamInd
   };
 
   const { stdout } = process;
-  assert(stdout != null);
 
   stdout.pause();
 
@@ -35,6 +28,8 @@ export function createMediaSourceStream({ path, videoStreamIndex, audioStreamInd
       cleanup();
       resolve(null);
     };
+
+    // poor man's backpressure handling: we only read one chunk at a time
     const onData = (chunk: Buffer) => {
       stdout.pause();
       cleanup();
@@ -80,29 +75,4 @@ export function createMediaSourceStream({ path, videoStreamIndex, audioStreamInd
   })();
 
   return { abort, readChunk };
-}
-
-export function readOneJpegFrame({ path, seekTo, videoStreamIndex }: { path: string, seekTo: number, videoStreamIndex: number }) {
-  const abortController = new AbortController();
-  const process = readOneJpegFrameRaw({ path, seekTo, videoStreamIndex });
-
-  // eslint-disable-next-line unicorn/prefer-add-event-listener
-  abortController.signal.onabort = () => process.kill('SIGKILL');
-
-  function abort() {
-    abortController.abort();
-  }
-
-  const promise = (async () => {
-    try {
-      const { stdout } = await process;
-      return stdout;
-    } catch (err) {
-      // @ts-expect-error todo
-      logger.error('renderOneJpegFrame', err.shortMessage);
-      throw new Error('Failed to render JPEG frame');
-    }
-  })();
-
-  return { promise, abort };
 }

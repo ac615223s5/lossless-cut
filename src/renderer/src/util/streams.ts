@@ -367,12 +367,22 @@ export async function doesPlayerSupportHevcPlayback() {
 // so we will detect these codecs and convert to dummy
 // "properly handle" here means either play it back or give a playback error if the video codec is not supported
 // todo maybe improve https://github.com/mifi/lossless-cut/issues/88#issuecomment-1363828563
-export function willPlayerProperlyHandleVideo({ streams, hevcPlaybackSupported }: {
-  streams: FFprobeStream[], hevcPlaybackSupported: boolean,
+export function willPlayerProperlyHandleVideo({ streams, hevcPlaybackSupported, isMasBuild }: {
+  streams: FFprobeStream[],
+  hevcPlaybackSupported: boolean,
+  isMasBuild: boolean,
 }) {
   const realVideoStreams = getRealVideoStreams(streams);
   // If audio-only format, assume all is OK
   if (realVideoStreams.length === 0) return true;
+
+  // https://github.com/mifi/lossless-cut/issues/2562
+  // https://github.com/mifi/lossless-cut/issues/2548
+  // https://github.com/electron/electron/issues/47947
+  if (isMasBuild && realVideoStreams.some((s) => s.color_space != null && ['bt2020nc', 'bt2020_ncl', 'bt2020c', 'bt2020_cl'].includes(s.color_space) && s.color_primaries === 'bt2020')) {
+    return false;
+  }
+
   // If we have at least one video that is NOT of the unsupported formats, assume the player will be able to play it natively
   // But cover art / thumbnail streams don't count e.g. hevc with a png stream (disposition.attached_pic=1)
   // https://github.com/mifi/lossless-cut/issues/595
