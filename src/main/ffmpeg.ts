@@ -5,10 +5,10 @@ import { execa, Options as ExecaOptions, ResultPromise } from 'execa';
 import assert from 'node:assert';
 import { Readable } from 'node:stream';
 // eslint-disable-next-line import/no-extraneous-dependencies
-import { app } from 'electron';
+import { app, clipboard, nativeImage } from 'electron';
 
 import { platform, arch, isWindows, isLinux } from './util.js';
-import { CaptureFormat, Waveform } from '../../types.js';
+import { CaptureFormat, Waveform } from '../common/types.js';
 import isDev from './isDev.js';
 import logger from './logger.js';
 import { parseFfmpegProgressLine } from './progress.js';
@@ -57,6 +57,9 @@ function getFfPath(cmd: string) {
 }
 
 const getFfprobePath = () => getFfPath('ffprobe');
+/**
+ * ⚠️ Do not use directly when running ffmpeg, because we need to add certain options before running, like `LD_LIBRARY_PATH` on linux
+ */
 export const getFfmpegPath = () => getFfPath('ffmpeg');
 
 export function abortFfmpegs() {
@@ -503,15 +506,44 @@ export async function captureFrames({ from, to, videoPath, outPathTemplate, qual
   return args;
 }
 
-export async function captureFrame({ timestamp, videoPath, outPath, quality }: {
-  timestamp: number, videoPath: string, outPath: string, quality: number,
+function getCaptureFrameArgs({ timestamp, videoPath, quality }: {
+  timestamp: number,
+  videoPath: string,
+  quality: number,
 }) {
   const ffmpegQuality = getFfmpegJpegQuality(quality);
-  const args = [
+  return [
     '-ss', String(timestamp),
     '-i', videoPath,
-    '-vframes', '1',
+    '-frames:v', '1',
     '-q:v', String(ffmpegQuality),
+  ];
+}
+
+export async function captureFrameToClipboard({ timestamp, videoPath, quality }: {
+  timestamp: number,
+  videoPath: string,
+  quality: number,
+}) {
+  const args = [
+    ...getCaptureFrameArgs({ timestamp, videoPath, quality }),
+    '-c:v', 'mjpeg',
+    '-f', 'image2',
+    '-',
+  ];
+  const { stdout } = await runFfmpegProcess(args);
+
+  clipboard.writeImage(nativeImage.createFromBuffer(Buffer.from(stdout)));
+}
+
+export async function captureFrameToFile({ timestamp, videoPath, outPath, quality }: {
+  timestamp: number,
+  videoPath: string,
+  outPath: string,
+  quality: number,
+}) {
+  const args = [
+    ...getCaptureFrameArgs({ timestamp, videoPath, quality }),
     '-y', outPath,
   ];
   await runFfmpegProcess(args);
@@ -654,7 +686,7 @@ export function createMediaSourceProcess({ path, videoStreamIndex, audioStreamIn
 
   logger.info(getFfCommandLine('ffmpeg', args));
 
-  return execa(getFfmpegPath(), args, { encoding: 'buffer', buffer: false, stderr: enableLog ? 'inherit' : 'pipe' });
+  return execa(getFfmpegPath(), args, getExecaOptions({ buffer: false, stderr: enableLog ? 'inherit' : 'pipe' }));
 }
 
 export async function downloadMediaUrl(url: string, outPath: string) {
@@ -671,5 +703,5 @@ export async function downloadMediaUrl(url: string, outPath: string) {
   await runFfmpegProcess(args);
 }
 
-// Don't pass complex objects over the bridge (process)
+// Don't pass complex objects over the bridge (the process), so just convert it to a promise
 export const runFfmpeg = async (...args: Parameters<typeof runFfmpegProcess>) => runFfmpegProcess(...args);

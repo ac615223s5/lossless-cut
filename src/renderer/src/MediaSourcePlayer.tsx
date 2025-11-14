@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useCallback, useMemo, memo, CSSProperties, RefObject, ReactEventHandler, FocusEventHandler } from 'react';
-import { Spinner } from 'evergreen-ui';
 import invariant from 'tiny-invariant';
 import debounce from 'lodash/debounce.js';
+import { FaVideo } from 'react-icons/fa';
 
 import isDev from './isDev';
 import { ChromiumHTMLVideoElement } from './types';
-import { FFprobeStream } from '../../../ffprobe';
+import { FFprobeStream } from '../../common/ffprobe';
+import { getFrameDuration } from './util';
 
 const { compatPlayer: { createMediaSourceStream } } = window.require('@electron/remote').require('./index.js');
 
@@ -97,7 +98,7 @@ async function startPlayback({ path, slaveVideo, masterVideo, videoStreamIndex, 
   // console.log(mediaSource.readyState); // open
 
   const sourceBuffer = mediaSource.addSourceBuffer(mimeCodec);
-  sourceBuffer.timestampOffset = seekTo;
+  sourceBuffer.timestampOffset = seekTo - getFrameDuration(fps); // subtract 1 frame in order to attempt to avoid this issue: https://github.com/mifi/lossless-cut/issues/2591#issuecomment-3478018458
 
   signal.addEventListener('abort', () => sourceBuffer.abort());
 
@@ -403,7 +404,9 @@ function MediaSourcePlayer({ rotate, filePath, videoStream, audioStreams, master
       <canvas style={{ ...videoStyle, display: showCanvas ? 'initial' : 'none' }} ref={canvasRef} />
 
       {loading && (
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, display: 'flex', justifyContent: 'center', alignItems: 'center' }}><Spinner /></div>
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+          <FaVideo className="loading-animation" style={{ padding: '1em', background: 'rgba(0,0,0,0.2)', borderRadius: '50%' }} />
+        </div>
       )}
     </div>
   );

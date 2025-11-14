@@ -1,19 +1,16 @@
 import i18n from 'i18next';
 import pMap from 'p-map';
-import ky from 'ky';
 import prettyBytes from 'pretty-bytes';
 import sortBy from 'lodash/sortBy';
 import pRetry, { Options } from 'p-retry';
 import { ExecaError } from 'execa';
 import confetti from 'canvas-confetti';
+import invariant from 'tiny-invariant';
 
-import isDev from './isDev';
-import Swal, { errorToast, toast } from './swal';
 import { ffmpegExtractWindow } from './util/constants';
 import { appName } from '../../main/common';
-import { DirectoryAccessDeclinedError, UnsupportedFileError } from '../errors';
-import { Html5ifyMode } from '../../../types';
-import { prefersReducedMotion } from './animations';
+import { Html5ifyMode } from '../../common/types';
+import { UserFacingError } from '../errors';
 
 const { dirname, parse: parsePath, join, extname, isAbsolute, resolve, basename } = window.require('path');
 const fsExtra = window.require('fs-extra');
@@ -22,10 +19,13 @@ const { ipcRenderer } = window.require('electron');
 const remote = window.require('@electron/remote');
 const { isWindows, isMac } = remote.require('./index.js');
 
-export { isWindows, isMac };
+const appVersion = remote.app.getVersion();
+const appPath = remote.app.getAppPath();
+
+export { isWindows, isMac, appVersion, appPath };
 
 
-const trashFile = async (path: string) => ipcRenderer.invoke('tryTrashItem', path);
+export const trashFile = async (path: string) => ipcRenderer.invoke('tryTrashItem', path);
 
 export const showItemInFolder = async (path: string) => ipcRenderer.invoke('showItemInFolder', path);
 
@@ -34,7 +34,10 @@ export function getFileDir(filePath?: string) {
   return filePath ? dirname(filePath) : undefined;
 }
 
-export function getOutDir<T1 extends string | undefined, T2 extends string | undefined>(customOutDir?: T1, filePath?: T2): T1 extends string ? string : T2 extends string ? string : undefined;
+export function getOutDir(customOutDir: string | undefined, filePath: string): string;
+export function getOutDir(customOutDir: string, filePath: undefined): string;
+export function getOutDir(customOutDir: undefined, filePath: undefined): undefined;
+export function getOutDir(customOutDir: string | undefined, filePath: string | undefined): string | undefined;
 export function getOutDir(customOutDir?: string | undefined, filePath?: string | undefined) {
   if (customOutDir != null) return customOutDir;
   if (filePath != null) return getFileDir(filePath);
@@ -108,8 +111,8 @@ export async function dirExists(dirPath: string) {
   return (await pathExists(dirPath)) && (await lstat(dirPath)).isDirectory();
 }
 
-// const testFailFsOperation = isDev;
-const testFailFsOperation = false;
+// export const testFailFsOperation = isDev;
+export const testFailFsOperation = false;
 
 // Retry because sometimes write operations fail on windows due to the file being locked for various reasons (often anti-virus) #272 #1797 #1704
 export async function fsOperationWithRetry(operation: () => Promise<unknown>, { signal, retries = 10, minTimeout = 100, maxTimeout = 2000, ...opts }: Options & { retries?: number | undefined, minTimeout?: number | undefined, maxTimeout?: number | undefined } = {}) {
@@ -234,7 +237,7 @@ export async function findExistingHtml5FriendlyFile(fp: string, cod: string | un
   const prefix = getSuffixedFileName(fp, html5ifiedPrefix);
 
   const outDir = getOutDir(cod, fp);
-  if (outDir == null) throw new Error();
+  invariant(outDir != null);
   const dirEntries = await readdir(outDir);
 
   const html5ifiedDirEntries = dirEntries.filter((entry) => entry.startsWith(prefix));
@@ -267,36 +270,6 @@ export function getHtml5ifiedPath(cod: string | undefined, fp: string, type: Htm
   return getSuffixedOutPath({ customOutDir: cod, filePath: fp, nameSuffix: `${html5ifiedPrefix}${type}.${ext}` });
 }
 
-export async function deleteFiles({ paths, deleteIfTrashFails, signal }: { paths: string[], deleteIfTrashFails?: boolean | undefined, signal: AbortSignal }) {
-  const failedToTrashFiles: string[] = [];
-
-  // eslint-disable-next-line no-restricted-syntax
-  for (const path of paths) {
-    try {
-      if (testFailFsOperation) throw new Error('test trash failure');
-      // eslint-disable-next-line no-await-in-loop
-      await trashFile(path);
-      signal.throwIfAborted();
-    } catch (err) {
-      console.error(err);
-      failedToTrashFiles.push(path);
-    }
-  }
-
-  if (failedToTrashFiles.length === 0) return; // All good!
-
-  if (!deleteIfTrashFails) {
-    const { value } = await Swal.fire({
-      icon: 'warning',
-      text: i18n.t('Unable to move file to trash. Do you want to permanently delete it?'),
-      confirmButtonText: i18n.t('Permanently delete'),
-      showCancelButton: true,
-    });
-    if (!value) return;
-  }
-
-  await pMap(failedToTrashFiles, async (path) => unlinkWithRetry(path, { signal }), { concurrency: 5 });
-}
 
 export const deleteDispositionValue = 'llc_disposition_remove';
 
@@ -331,96 +304,6 @@ export const isMuxNotSupported = (err: InvariantExecaError) => (
   && err.stderr != null
   && /Could not write header .*incorrect codec parameters .*Invalid argument/.test(getStdioString(err.stderr) ?? '')
 );
-
-export function handleError(arg1: unknown, arg2?: unknown) {
-  console.error('handleError', arg1, arg2);
-
-  let err: Error | undefined;
-  let str: string | undefined;
-
-  if (typeof arg1 === 'string') str = arg1;
-  else if (typeof arg2 === 'string') str = arg2;
-
-  if (arg1 instanceof Error) err = arg1;
-  else if (arg2 instanceof Error) err = arg2;
-
-  if (err instanceof UnsupportedFileError) {
-    errorToast(i18n.t('Unsupported file'));
-  } else {
-    Swal.fire({
-      icon: 'error',
-      title: str || i18n.t('An error has occurred.'),
-      text: err?.message ? err?.message.slice(0, 300) : undefined,
-    });
-  }
-}
-
-/**
- * Run an operation with error handling
- */
-export async function withErrorHandling(operation: () => Promise<void>, errorMsgOrFn?: string | ((err: unknown) => string)) {
-  try {
-    await operation();
-  } catch (err) {
-    if (err instanceof DirectoryAccessDeclinedError || isAbortedError(err)) return;
-
-    if (err instanceof UnsupportedFileError) {
-      errorToast(i18n.t('Unsupported file'));
-      return;
-    }
-
-    let errorMsg: string | undefined;
-    if (typeof errorMsgOrFn === 'string') errorMsg = errorMsgOrFn;
-    if (typeof errorMsgOrFn === 'function') errorMsg = errorMsgOrFn(err);
-    if (errorMsg != null) {
-      console.error(errorMsg, err);
-      handleError(errorMsg, err);
-    } else {
-      handleError(err);
-    }
-  }
-}
-
-export async function checkAppPath() {
-  try {
-    const forceCheckMs = false;
-    const forceCheckTitle = false;
-    // this code is purposefully obfuscated to try to detect the most basic cloned app submissions to the MS Store
-    // eslint-disable-next-line no-useless-concat, one-var, one-var-declaration-per-line
-    const mf = 'mi' + 'fi.no', ap = 'Los' + 'slessC' + 'ut';
-    let payload: string | undefined;
-    if (isWindowsStoreBuild || (isDev && forceCheckMs)) {
-      const appPath = isDev ? 'C:\\Program Files\\WindowsApps\\37672NoveltyStudio.MediaConverter_9.0.6.0_x64__vjhnv588cyf84' : remote.app.getAppPath();
-      const pathMatch = appPath.replaceAll('\\', '/').match(/Windows ?Apps\/([^/]+)/); // find the first component after WindowsApps
-      // example pathMatch: 37672NoveltyStudio.MediaConverter_9.0.6.0_x64__vjhnv588cyf84
-      if (!pathMatch) {
-        console.warn('Unknown path match', appPath);
-        return;
-      }
-      const pathSeg = pathMatch[1];
-      if (pathSeg == null) return;
-      if (pathSeg.startsWith(`57275${mf}.${ap}_`)) return;
-      // this will report the path and may return a msg
-      payload = `msstore-app-id:${pathSeg}`;
-      // also check non ms store fakes (different title:)
-    } else if (isMac || isWindows || (isDev && forceCheckTitle)) {
-      const { title } = document;
-      if (!title.includes(ap)) {
-        payload = `app-title:${title}`;
-      }
-    }
-
-    if (payload) {
-      // eslint-disable-next-line no-useless-concat
-      const url = 'htt' + 'ps:/' + '/los' + 'sles' + 'sc' + 'ut-anal' + 'ytics.mi' + 'fi.n' + `o/${payload.length}/${encodeURIComponent(btoa(payload))}`;
-      // console.log('Reporting app', pathSeg, url);
-      const response = await ky(url).json<{ invalid?: boolean, title: string, text: string }>();
-      if (response.invalid) toast.fire({ timer: 60000, icon: 'error', title: response.title, text: response.text });
-    }
-  } catch (err) {
-    if (isDev) console.warn(err instanceof Error && err.message);
-  }
-}
 
 // https://stackoverflow.com/a/2450976/6519037
 export function shuffleArray<T>(arrayIn: T[]) {
@@ -478,25 +361,16 @@ export function setDocumentTitle({ filePath, working, progress }: {
     parts.push(basename(filePath));
   }
 
-  parts.push(appName);
+  parts.push(isStoreBuild ? appName : `${appName} ${appVersion}`);
 
   document.title = parts.join(' - ');
-}
-
-export function mustDisallowVob() {
-  // Because Apple is being nazi about the ability to open "copy protected DVD files"
-  if (isMasBuild) {
-    toast.fire({ icon: 'error', text: 'Unfortunately .vob files are not supported in the App Store version of LosslessCut due to Apple restrictions' });
-    return true;
-  }
-  return false;
 }
 
 export async function readVideoTs(videoTsPath: string) {
   const files = await readdir(videoTsPath);
   const relevantFiles = files.filter((file) => /^vts_\d+_\d+\.vob$/i.test(file) && !/^vts_\d+_00\.vob$/i.test(file)); // skip menu
   const ret = sortBy(relevantFiles).map((file) => join(videoTsPath, file));
-  if (ret.length === 0) throw new Error('No VTS vob files found in folder');
+  if (ret.length === 0) throw new UserFacingError(i18n.t('No VTS vob files found in folder'));
   return ret;
 }
 
@@ -512,7 +386,7 @@ export async function readDirRecursively(dirPath: string) {
     return [absPath];
   }, { concurrency: 5 })).flat();
 
-  if (ret.length === 0) throw new Error('No files found in folder');
+  if (ret.length === 0) throw new UserFacingError(i18n.t('No files found in folder'));
   return ret;
 }
 
@@ -531,9 +405,24 @@ export const mediaSourceQualities = ['HD', 'SD', 'OG']; // OG is original
 
 export const splitKeyboardKeys = (keys: string) => keys.split('+');
 
-export function shootConfetti(options?: confetti.Options) {
-  if (prefersReducedMotion()) return;
+// source: https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values
+// copy([...new Set([temp1, temp2, temp3].map((t) => t.querySelectorAll('tr td:nth-child(3) code:first-child')).flatMap((l) => [...l]).map((code) => code.innerText.replace(/"/g, '')))].join('\n'))
+export const shiftModifiers = new Set(['ShiftLeft', 'ShiftRight']);
+export const controlModifiers = new Set(['ControlLeft', 'ControlRight']);
+export const altModifiers = new Set(['AltLeft', 'AltRight']);
+export const metaModifiers = new Set(['MetaLeft', 'MetaRight']);
+export const allModifiers = new Set([...shiftModifiers, ...controlModifiers, ...altModifiers, ...metaModifiers]);
 
+
+export function getMetaKeyName() {
+  if (isMac) return i18n.t('⌘ Cmd');
+  if (isWindows) return i18n.t('⊞ Win');
+  return i18n.t('Meta');
+}
+
+export const dialogButtonOrder = isWindows ? 'rtl' : 'ltr'; // use ltr for mac and linux, rtl for windows
+
+export function shootConfetti(options?: confetti.Options) {
   confetti({
     particleCount: 30,
     angle: 110,

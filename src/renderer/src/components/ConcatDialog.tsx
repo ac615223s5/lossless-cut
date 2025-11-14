@@ -1,121 +1,122 @@
-import { memo, useState, useCallback, useEffect, useMemo, CSSProperties } from 'react';
+import { memo, useState, useCallback, useEffect, useMemo, CSSProperties, Dispatch, SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
-import { IconButton } from 'evergreen-ui';
 import { AiOutlineMergeCells } from 'react-icons/ai';
-import { FaQuestionCircle, FaExclamationTriangle, FaCog } from 'react-icons/fa';
+import { FaQuestionCircle, FaExclamationTriangle, FaCog, FaCheck, FaNotEqual } from 'react-icons/fa';
 import i18n from 'i18next';
 import invariant from 'tiny-invariant';
-import Checkbox from './Checkbox';
 
-import { ReactSwal } from '../swal';
+import Checkbox from './Checkbox';
 import { readFileMeta, getDefaultOutFormat, mapRecommendedDefaultFormat } from '../ffmpeg';
-import useFileFormatState from '../hooks/useFileFormatState';
 import OutputFormatSelect from './OutputFormatSelect';
 import useUserSettings from '../hooks/useUserSettings';
 import { isMov } from '../util/streams';
-import { getOutDir, getOutFileExtension } from '../util';
-import { FFprobeChapter, FFprobeFormat, FFprobeStream } from '../../../../ffprobe';
-import TextInput from './TextInput';
-import Button from './Button';
-import { defaultMergedFileTemplate, generateMergedFileNames, maxFileNameLength } from '../util/outputNameTemplate';
-import Dialog from './Dialog';
-import { primaryColor } from '../colors';
-import ExportDialog from './ExportDialog';
+import { getOutDir } from '../util';
+import { FFprobeChapter, FFprobeFormat, FFprobeStream } from '../../../common/ffprobe';
+import Button, { DialogButton } from './Button';
+import { defaultMergedFileTemplate, GeneratedOutFileNames, GenerateMergedOutFileNames } from '../util/outputNameTemplate';
+import { dangerColor, saveColor, warningColor } from '../colors';
+import * as Dialog from './Dialog';
+import FileNameTemplateEditor from './FileNameTemplateEditor';
+import HighlightedText from './HighlightedText';
 
 const { basename } = window.require('path');
 
 
 const rowStyle: CSSProperties = {
-  fontSize: '1em', margin: '4px 0px', overflowY: 'auto', whiteSpace: 'nowrap',
+  margin: '.3em 0', overflowY: 'auto', whiteSpace: 'nowrap',
 };
 
 function Alert({ text }: { text: string }) {
   return (
-    <div style={{ marginBottom: '1em' }}><FaExclamationTriangle style={{ color: 'var(--orange-8)', fontSize: '1.3em', verticalAlign: 'middle', marginRight: '.2em' }} /> {text}</div>
+    <div style={{ marginBottom: '1em' }}><FaExclamationTriangle style={{ color: warningColor, verticalAlign: 'middle', marginRight: '.2em' }} /> {text}</div>
   );
 }
 
-function ConcatDialog({ isShown, onHide, paths, onConcat, alwaysConcatMultipleFiles, setAlwaysConcatMultipleFiles, exportCount, maxLabelLength }: {
+type Problem = { index: number, type: 'extraneous' }
+  | { index: number, type: 'parameter_mismatch', key: string, values: [string | number | undefined, string | number | undefined] };
+
+function ConcatDialog({ isShown, onHide, paths, mergedFileTemplate, generateMergedFileNames, onConcat, alwaysConcatMultipleFiles, setAlwaysConcatMultipleFiles, fileFormat, setFileFormat, detectedFileFormat, setDetectedFileFormat, onOutputFormatUserChange }: {
   isShown: boolean,
   onHide: () => void,
   paths: string[],
-  onConcat: (a: { paths: string[], includeAllStreams: boolean, streams: FFprobeStream[], outFileName: string, fileFormat: string, clearBatchFilesAfterConcat: boolean }) => Promise<void>,
+  mergedFileTemplate: string,
+  generateMergedFileNames: GenerateMergedOutFileNames,
+  onConcat: (a: { paths: string[], includeAllStreams: boolean, streams: FFprobeStream[], fileFormat: string, clearBatchFilesAfterConcat: boolean, generatedFileNames: GeneratedOutFileNames }) => Promise<void>,
   alwaysConcatMultipleFiles: boolean,
   setAlwaysConcatMultipleFiles: (a: boolean) => void,
-  exportCount: number,
-  maxLabelLength: number,
+  fileFormat: string | undefined,
+  setFileFormat: Dispatch<SetStateAction<string | undefined>>,
+  detectedFileFormat: string | undefined,
+  setDetectedFileFormat: Dispatch<SetStateAction<string | undefined>>,
+  onOutputFormatUserChange: (newFormat: string) => void,
 }) {
   const { t } = useTranslation();
-  const { preserveMovData, setPreserveMovData, segmentsToChapters, setSegmentsToChapters, preserveMetadataOnMerge, setPreserveMetadataOnMerge, safeOutputFileName, customOutDir } = useUserSettings();
+  const { preserveMovData, setPreserveMovData, segmentsToChapters, setSegmentsToChapters, preserveMetadataOnMerge, setPreserveMetadataOnMerge, customOutDir, simpleMode, setMergedFileTemplate, outFormatLocked, changeOutDir } = useUserSettings();
 
   const [includeAllStreams, setIncludeAllStreams] = useState(false);
   const [fileMeta, setFileMeta] = useState<{ format: FFprobeFormat, streams: FFprobeStream[], chapters: FFprobeChapter[] }>();
   const [allFilesMetaCache, setAllFilesMetaCache] = useState<Record<string, {format: FFprobeFormat, streams: FFprobeStream[], chapters: FFprobeChapter[] }>>({});
   const [clearBatchFilesAfterConcat, setClearBatchFilesAfterConcat] = useState(false);
-  const [settingsVisible, setSettingsVisible] = useState(false);
   const [enableReadFileMeta, setEnableReadFileMeta] = useState(false);
-  const [outFileName, setOutFileName] = useState<string>();
-  const [uniqueSuffix, setUniqueSuffix] = useState<number>();
-
-  const { fileFormat, setFileFormat, detectedFileFormat, setDetectedFileFormat, isCustomFormatSelected } = useFileFormatState();
+  const [uniqueSuffix, setUniqueSuffix] = useState(Date.now());
 
   const firstPath = useMemo(() => {
     if (paths.length === 0) return undefined;
     return paths[0];
   }, [paths]);
 
+  const outputDir = getOutDir(customOutDir, firstPath);
+
+  const generateFileNames = useCallback(async (template: string) => {
+    invariant(firstPath != null && fileFormat != null && outputDir != null);
+
+    return generateMergedFileNames({ template, filePaths: paths, fileFormat, outputDir, epochMs: uniqueSuffix });
+  }, [fileFormat, firstPath, generateMergedFileNames, outputDir, paths, uniqueSuffix]);
+
+  useEffect(() => {
+    if (!isShown) {
+      setFileMeta(undefined);
+    }
+  }, [isShown, setDetectedFileFormat, setFileFormat]);
+
   useEffect(() => {
     if (!isShown) return undefined;
 
-    let aborted = false;
+    const abortController = new AbortController();
 
     (async () => {
-      setFileMeta(undefined);
-      setFileFormat(undefined);
-      setDetectedFileFormat(undefined);
-      setOutFileName(undefined);
       invariant(firstPath != null);
       const fileMetaNew = await readFileMeta(firstPath);
       const fileFormatNew = await getDefaultOutFormat({ filePath: firstPath, fileMeta: fileMetaNew });
-      if (aborted) return;
+      if (abortController.signal.aborted) return;
+
       setFileMeta(fileMetaNew);
       setDetectedFileFormat(fileFormatNew);
-      setFileFormat(mapRecommendedDefaultFormat({ sourceFormat: fileFormatNew, streams: fileMetaNew.streams }).format);
+      if (outFormatLocked) {
+        setFileFormat(outFormatLocked);
+      } else {
+        setFileFormat(mapRecommendedDefaultFormat({ sourceFormat: fileFormatNew, streams: fileMetaNew.streams }).format);
+      }
       setUniqueSuffix(Date.now());
     })().catch(console.error);
 
-    return () => {
-      aborted = true;
-    };
-  }, [firstPath, isShown, setDetectedFileFormat, setFileFormat]);
+    return () => abortController.abort();
+  }, [firstPath, isShown, outFormatLocked, setDetectedFileFormat, setFileFormat, setMergedFileTemplate, simpleMode]);
 
   useEffect(() => {
-    if (fileFormat == null || firstPath == null || uniqueSuffix == null) {
-      setOutFileName(undefined);
-      return;
-    }
-    const ext = getOutFileExtension({ isCustomFormatSelected, outFormat: fileFormat, filePath: firstPath });
-    const outputDir = getOutDir(customOutDir, firstPath);
+    const abortController = new AbortController();
 
-    setOutFileName((existingOutputName) => {
-      // here we only generate the file name the first time. Then the user can edit it manually as they please in the text input field.
-      // todo allow user to edit template instead of this "hack"
-      if (existingOutputName == null) {
-        (async () => {
-          const generated = await generateMergedFileNames({ template: defaultMergedFileTemplate, isCustomFormatSelected, fileFormat, filePath: firstPath, outputDir, safeOutputFileName, maxLabelLength, epochMs: uniqueSuffix, exportCount });
-          // todo show to user more errors?
-          const [fileName] = generated.fileNames;
-          invariant(fileName != null);
-          setOutFileName(fileName);
-        })();
-        return existingOutputName; // async later (above)
+    (async () => {
+      // in simple mode, set merged file template to a generated name based on first file, so they don't *have to* deal with variables
+      if (isShown && simpleMode && firstPath != null && fileFormat != null) {
+        const generated = await generateFileNames(defaultMergedFileTemplate);
+        if (abortController.signal.aborted) return;
+        setMergedFileTemplate(generated.fileNames[0]);
       }
+    })().catch(console.error);
 
-      // in case the user has chosen a different output format:
-      // make sure the last (optional) .* is replaced by .ext`
-      return existingOutputName.replace(/(\.[^.]*)?$/, ext);
-    });
-  }, [customOutDir, exportCount, fileFormat, firstPath, isCustomFormatSelected, maxLabelLength, safeOutputFileName, uniqueSuffix]);
+    return () => abortController.abort();
+  }, [fileFormat, firstPath, generateFileNames, isShown, setMergedFileTemplate, simpleMode]);
 
   const allFilesMeta = useMemo(() => {
     if (paths.length === 0) return undefined;
@@ -123,25 +124,22 @@ function ConcatDialog({ isShown, onHide, paths, onConcat, alwaysConcatMultipleFi
     return filtered.length === paths.length ? filtered : undefined;
   }, [allFilesMetaCache, paths]);
 
-  const isOutFileNameTooLong = outFileName != null && outFileName.length > maxFileNameLength;
-  const isOutFileNameValid = outFileName != null && outFileName.length > 0 && !isOutFileNameTooLong;
-
   const problemsByFile = useMemo(() => {
     if (!allFilesMeta) return {};
     const allFilesMetaExceptFirstFile = allFilesMeta.slice(1);
     const [, firstFileMeta] = allFilesMeta[0]!;
-    const errors: Record<string, string[]> = {};
+    const problems: Record<string, Problem[]> = {};
 
-    function addError(path: string, error: string) {
-      if (!errors[path]) errors[path] = [];
-      errors[path]!.push(error);
+    function addProblem(path: string, error: Problem) {
+      if (!problems[path]) problems[path] = [];
+      problems[path]!.push(error);
     }
 
     allFilesMetaExceptFirstFile.forEach(([path, { streams }]) => {
       streams.forEach((stream, i) => {
         const referenceStream = firstFileMeta.streams[i];
         if (!referenceStream) {
-          addError(path, i18n.t('Extraneous track {{index}}', { index: stream.index + 1 }));
+          addProblem(path, { type: 'extraneous', index: stream.index });
           return;
         }
         // check all these parameters
@@ -149,34 +147,23 @@ function ConcatDialog({ isShown, onHide, paths, onConcat, alwaysConcatMultipleFi
           const val = stream[key];
           const referenceVal = referenceStream[key];
           if (val !== referenceVal) {
-            addError(path, i18n.t('Track {{index}} mismatch: {{key1}} {{value1}} != {{value2}}', { index: stream.index + 1, key1: key, value1: val || 'none', value2: referenceVal || 'none' }));
+            addProblem(path, { type: 'parameter_mismatch', index: stream.index, key, values: [String(val), referenceVal] });
           }
         });
       });
     });
-    return errors;
+    return problems;
   }, [allFilesMeta]);
-
-  const onProblemsByFileClick = useCallback((path: string) => {
-    ReactSwal.fire({
-      title: i18n.t('Mismatches detected'),
-      html: (
-        <ul style={{ margin: '10px 0', textAlign: 'left' }}>
-          {(problemsByFile[path] || []).map((problem) => <li key={problem}>{problem}</li>)}
-        </ul>
-      ),
-    });
-  }, [problemsByFile]);
 
   useEffect(() => {
     if (!isShown || !enableReadFileMeta) return undefined;
 
-    let aborted = false;
+    const abortController = new AbortController();
 
     (async () => {
       // eslint-disable-next-line no-restricted-syntax
       for (const path of paths) {
-        if (aborted) return;
+        if (abortController.signal.aborted) return;
         if (!allFilesMetaCache[path]) {
           // eslint-disable-next-line no-await-in-loop
           const fileMetaNew = await readFileMeta(path);
@@ -185,95 +172,160 @@ function ConcatDialog({ isShown, onHide, paths, onConcat, alwaysConcatMultipleFi
       }
     })().catch(console.error);
 
-    return () => {
-      aborted = true;
-    };
+    return () => abortController.abort();
   }, [allFilesMetaCache, enableReadFileMeta, isShown, paths]);
 
-  const onOutputFormatUserChange = useCallback((newFormat: string) => setFileFormat(newFormat), [setFileFormat]);
-
-  const onConcatClick = useCallback(() => {
-    invariant(outFileName != null);
+  const onConcatClick = useCallback(async () => {
     invariant(fileFormat != null);
-    onConcat({ paths, includeAllStreams, streams: fileMeta!.streams, outFileName, fileFormat, clearBatchFilesAfterConcat });
-  }, [clearBatchFilesAfterConcat, fileFormat, fileMeta, includeAllStreams, onConcat, outFileName, paths]);
+    invariant(firstPath != null);
+    invariant(outputDir != null);
+
+    const generatedFileNames = await generateMergedFileNames({ template: mergedFileTemplate, filePaths: paths, fileFormat, outputDir, epochMs: uniqueSuffix });
+
+    await onConcat({ paths, includeAllStreams, streams: fileMeta!.streams, fileFormat, clearBatchFilesAfterConcat, generatedFileNames });
+  }, [clearBatchFilesAfterConcat, fileFormat, fileMeta, firstPath, generateMergedFileNames, includeAllStreams, mergedFileTemplate, onConcat, outputDir, paths, uniqueSuffix]);
+
+  const handleReadFileMetaCheckedChange = useCallback((checked: boolean) => {
+    setEnableReadFileMeta(checked);
+    setAllFilesMetaCache({});
+  }, []);
 
   return (
-    <ExportDialog
-      visible={isShown}
-      title={t('Merge/concatenate files')}
-      onClosePress={onHide}
-      renderButton={() => (
-        <Button className="export-animation" disabled={detectedFileFormat == null || !isOutFileNameValid} onClick={onConcatClick} style={{ fontSize: '1.3em', padding: '0 .3em', marginLeft: '1em', background: primaryColor, color: 'white', border: 'none' }}>
-          <AiOutlineMergeCells style={{ fontSize: '1.4em', verticalAlign: 'middle' }} /> {t('Merge!')}
-        </Button>
-      )}
-      width="70em"
-    >
-      <div style={{ marginBottom: '1em' }}>
-        <div style={{ whiteSpace: 'pre-wrap', fontSize: '.9em', marginBottom: '1em' }}>
-          {t('This dialog can be used to concatenate files in series, e.g. one after the other:\n[file1][file2][file3]\nIt can NOT be used for merging tracks in parallell (like adding an audio track to a video).\nMake sure all files are of the exact same codecs & codec parameters (fps, resolution etc).')}
-        </div>
+    <Dialog.Root open={isShown} onOpenChange={(open) => !open && onHide()}>
+      <Dialog.Portal>
+        <Dialog.Overlay />
+        <Dialog.Content style={{ width: '60em' }}>
+          <Dialog.Title>{t('Merge/concatenate files')}</Dialog.Title>
+          <Dialog.Description style={{ whiteSpace: 'pre-wrap' }}>{t('This dialog can be used to concatenate files in series, e.g. one after the other:\n[file1][file2][file3]\nIt can NOT be used for merging tracks in parallell (like adding an audio track to a video).\nMake sure all files are of the exact same codecs & codec parameters (fps, resolution etc).')}</Dialog.Description>
 
-        <div style={{ backgroundColor: 'var(--gray-1)', borderRadius: '.1em' }}>
-          {paths.map((path, index) => (
-            <div key={path} style={rowStyle} title={path}>
-              <div>
-                <span style={{ opacity: 0.7, marginRight: '.4em' }}>{`${index + 1}.`}</span>
-                <span>{basename(path)}</span>
-                {!allFilesMetaCache[path] && <FaQuestionCircle style={{ color: 'var(--orange-8)', verticalAlign: 'middle', marginLeft: '1em' }} />}
-                {problemsByFile[path] && <IconButton appearance="minimal" icon={FaExclamationTriangle} onClick={() => onProblemsByFileClick(path)} title={i18n.t('Mismatches detected')} style={{ color: 'var(--orange-8)', marginLeft: '1em' }} />}
+          <div style={{ marginBottom: '1em', maxHeight: '30vh', overflowY: 'auto' }}>
+            {paths.map((path, index) => (
+              <div key={path} style={rowStyle} title={path}>
+                <div>
+                  <span style={{ opacity: 0.7, marginRight: '.4em' }}>{`${index + 1}.`}</span>
+
+                  <span>{basename(path)}</span>
+
+                  {allFilesMetaCache[path] ? (
+                    problemsByFile[path] ? (
+                      <Dialog.Root>
+                        <Dialog.Trigger asChild>
+                          <Button title={i18n.t('Mismatches detected')} style={{ color: warningColor, marginLeft: '1em' }}><FaExclamationTriangle /></Button>
+                        </Dialog.Trigger>
+
+                        <Dialog.Portal>
+                          <Dialog.Overlay />
+                          <Dialog.Content aria-describedby={undefined}>
+                            <Dialog.Title>{t('Mismatches detected')}</Dialog.Title>
+
+                            <ul style={{ margin: '10px 0', textAlign: 'left' }}>
+                              {(problemsByFile[path] ?? []).map((problem) => (
+                                <li key={JSON.stringify(problem)}>
+                                  <span style={{ marginRight: '.5em', color: 'var(--gray-11)' }}>{t('Track {{num}}', { num: problem.index + 1 })}:</span>
+
+                                  {problem.type === 'extraneous' && t('Extraneous')}
+
+                                  {problem.type === 'parameter_mismatch' && (
+                                    <>
+                                      <span style={{ marginRight: '1em' }}>{problem.key}</span>
+                                      <span style={{ fontWeight: 'bold' }}>{problem.values[0] ?? t('N/A')}</span>
+                                      <FaNotEqual style={{ fontSize: '.7em', marginLeft: '.7em', marginRight: '.7em', color: dangerColor, fontWeight: 'bold' }} />
+                                      <span style={{ fontWeight: 'bold', color: dangerColor }}>{problem.values[1] ?? t('N/A')}</span>
+                                    </>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+
+                            <Dialog.CloseButton />
+                          </Dialog.Content>
+                        </Dialog.Portal>
+                      </Dialog.Root>
+                    ) : (
+                      <FaCheck style={{ color: saveColor, verticalAlign: 'middle', marginLeft: '1em' }} />
+                    )
+                  ) : (
+                    <FaQuestionCircle style={{ color: warningColor, verticalAlign: 'middle', marginLeft: '1em' }} />
+                  )}
+                </div>
               </div>
+            ))}
+          </div>
+
+          <div style={{ marginBottom: '1em' }}>
+            {t('Save output to path:')}<br />
+            <HighlightedText role="button" onClick={changeOutDir} style={{ wordBreak: 'break-all', cursor: 'pointer' }}>{outputDir}</HighlightedText>
+          </div>
+
+          {fileFormat != null && (
+            <div style={{ marginBottom: '1em' }}>
+              <FileNameTemplateEditor mode="merge-files" template={mergedFileTemplate} setTemplate={setMergedFileTemplate} defaultTemplate={defaultMergedFileTemplate} generateFileNames={generateFileNames} />
             </div>
-          ))}
-        </div>
-      </div>
+          )}
 
-      <div style={{ marginBottom: '1em' }}>
-        <Checkbox style={{ marginBottom: '.7em' }} checked={enableReadFileMeta} onCheckedChange={(checked) => setEnableReadFileMeta(!!checked)} label={t('Check compatibility')} />
+          <div style={{ minHeight: '2.7em' }}>
+            {enableReadFileMeta && (!allFilesMeta || Object.values(problemsByFile).length > 0) && (
+              <Alert text={t('A mismatch was detected in at least one file. You may proceed, but the resulting file might not be playable.')} />
+            )}
+            {!enableReadFileMeta && (
+              <Alert text={t('File compatibility check is not enabled, so the merge operation might not produce a valid output. Enable "Check compatibility" below to check file compatibility before merging.')} />
+            )}
+          </div>
 
-        <Button onClick={() => setSettingsVisible(true)} style={{ padding: '.3em .5em', marginBottom: '.5em' }}><FaCog style={{ verticalAlign: 'top', fontSize: '1.4em', marginRight: '.2em' }} /> {t('Options')}</Button>
+          <Dialog.ButtonRow>
+            <Checkbox checked={enableReadFileMeta} onCheckedChange={handleReadFileMetaCheckedChange} label={t('Check compatibility')} />
 
-        <div>{t('Output container format:')}</div>
+            <Dialog.Close asChild>
+              <DialogButton>{t('Cancel')}</DialogButton>
+            </Dialog.Close>
 
-        {fileFormat && detectedFileFormat && (
-          <OutputFormatSelect style={{ height: '1.7em', maxWidth: '20em', marginBottom: '.7em' }} detectedFileFormat={detectedFileFormat} fileFormat={fileFormat} onOutputFormatUserChange={onOutputFormatUserChange} />
-        )}
+            <Dialog.Root>
+              <Dialog.Trigger asChild>
+                <Button style={{ padding: '.3em .5em' }}><FaCog style={{ verticalAlign: 'middle', fontSize: '1.4em', marginRight: '.2em' }} /> {t('Options')}</Button>
+              </Dialog.Trigger>
 
-        <div style={{ marginBottom: '.3em' }}>{t('Output file name')}:</div>
-        <TextInput style={{ width: '100%', fontSize: '1.2em', padding: '.1em .3em', marginBottom: '.7em' }} value={outFileName || ''} onChange={(e) => setOutFileName(e.target.value)} />
+              <Dialog.Portal>
+                <Dialog.Overlay />
+                <Dialog.Content style={{ width: '40em' }} aria-describedby={undefined}>
+                  <Dialog.Title>{t('Merge options')}</Dialog.Title>
 
-        {isOutFileNameTooLong && (
-          <Alert text={t('File name is too long and cannot be exported.')} />
-        )}
-        {enableReadFileMeta && (!allFilesMeta || Object.values(problemsByFile).length > 0) && (
-          <Alert text={t('A mismatch was detected in at least one file. You may proceed, but the resulting file might not be playable.')} />
-        )}
-        {!enableReadFileMeta && (
-          <Alert text={t('File compatibility check is not enabled, so the merge operation might not produce a valid output. Enable "Check compatibility" below to check file compatibility before merging.')} />
-        )}
-      </div>
+                  <Checkbox checked={includeAllStreams} onCheckedChange={(checked) => setIncludeAllStreams(checked === true)} label={`${t('Include all tracks?')} - ${t('If this is checked, all audio/video/subtitle/data tracks will be included. This may not always work for all file types. If not checked, only default streams will be included.')}`} />
 
-      {settingsVisible && (
-        <Dialog autoOpen onClose={() => setSettingsVisible(false)} style={{ maxWidth: '40em' }}>
-          <h1 style={{ marginTop: 0 }}>{t('Merge options')}</h1>
+                  <Checkbox checked={preserveMetadataOnMerge} onCheckedChange={(checked) => setPreserveMetadataOnMerge(checked === true)} label={t('Preserve original metadata when merging? (slow)')} />
 
-          <Checkbox checked={includeAllStreams} onCheckedChange={(checked) => setIncludeAllStreams(checked === true)} label={`${t('Include all tracks?')} - ${t('If this is checked, all audio/video/subtitle/data tracks will be included. This may not always work for all file types. If not checked, only default streams will be included.')}`} />
+                  {fileFormat != null && isMov(fileFormat) && <Checkbox checked={preserveMovData} onCheckedChange={(checked) => setPreserveMovData(checked === true)} label={t('Preserve all MP4/MOV metadata?')} />}
 
-          <Checkbox checked={preserveMetadataOnMerge} onCheckedChange={(checked) => setPreserveMetadataOnMerge(checked === true)} label={t('Preserve original metadata when merging? (slow)')} />
+                  <Checkbox checked={segmentsToChapters} onCheckedChange={(checked) => setSegmentsToChapters(checked === true)} label={t('Create chapters from merged segments? (slow)')} />
 
-          {fileFormat != null && isMov(fileFormat) && <Checkbox checked={preserveMovData} onCheckedChange={(checked) => setPreserveMovData(checked === true)} label={t('Preserve all MP4/MOV metadata?')} />}
+                  <Checkbox checked={alwaysConcatMultipleFiles} onCheckedChange={(checked) => setAlwaysConcatMultipleFiles(checked === true)} label={t('Always open this dialog when opening multiple files')} />
 
-          <Checkbox checked={segmentsToChapters} onCheckedChange={(checked) => setSegmentsToChapters(checked === true)} label={t('Create chapters from merged segments? (slow)')} />
+                  <Checkbox checked={clearBatchFilesAfterConcat} onCheckedChange={(checked) => setClearBatchFilesAfterConcat(checked === true)} label={t('Clear batch file list after merge')} />
 
-          <Checkbox checked={alwaysConcatMultipleFiles} onCheckedChange={(checked) => setAlwaysConcatMultipleFiles(checked === true)} label={t('Always open this dialog when opening multiple files')} />
+                  <p>{t('Note that also other settings from the normal export dialog apply to this merge function. For more information about all options, see the export dialog.')}</p>
 
-          <Checkbox checked={clearBatchFilesAfterConcat} onCheckedChange={(checked) => setClearBatchFilesAfterConcat(checked === true)} label={t('Clear batch file list after merge')} />
+                  <Dialog.ButtonRow>
+                    <Dialog.Close asChild>
+                      <DialogButton primary>{t('Close')}</DialogButton>
+                    </Dialog.Close>
+                  </Dialog.ButtonRow>
 
-          <p>{t('Note that also other settings from the normal export dialog apply to this merge function. For more information about all options, see the export dialog.')}</p>
-        </Dialog>
-      )}
-    </ExportDialog>
+                  <Dialog.CloseButton />
+                </Dialog.Content>
+              </Dialog.Portal>
+            </Dialog.Root>
+
+            <OutputFormatSelect disabled={fileFormat == null || detectedFileFormat == null} style={{ height: '2.1em', maxWidth: '20em' }} detectedFileFormat={detectedFileFormat} fileFormat={fileFormat} onOutputFormatUserChange={onOutputFormatUserChange} />
+
+            <DialogButton disabled={fileFormat == null} onClick={onConcatClick} primary>
+              <AiOutlineMergeCells style={{ fontSize: '1.3em', verticalAlign: 'middle', marginRight: '.3em' }} />
+              {t('Merge files')}
+            </DialogButton>
+          </Dialog.ButtonRow>
+
+          <Dialog.CloseButton />
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 

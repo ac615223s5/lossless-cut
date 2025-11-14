@@ -2,18 +2,19 @@ import { memo, useState, useEffect, useCallback, useRef, useMemo, ChangeEventHan
 import { useDebounce } from 'use-debounce';
 import i18n from 'i18next';
 import { useTranslation } from 'react-i18next';
-import { WarningSignIcon, ErrorIcon, Button, IconButton, TickIcon, ResetIcon } from 'evergreen-ui';
 import { IoIosHelpCircle } from 'react-icons/io';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FaEdit } from 'react-icons/fa';
+import { FaCaretUp, FaEdit, FaExclamationTriangle, FaEye, FaFile, FaUndo } from 'react-icons/fa';
 
-import { ReactSwal } from '../swal';
 import HighlightedText from './HighlightedText';
-import { segNumVariable, segSuffixVariable, GenerateOutFileNames, extVariable, segTagsVariable, segNumIntVariable, selectedSegNumVariable, selectedSegNumIntVariable } from '../util/outputNameTemplate';
+import { segNumVariable, segSuffixVariable, GenerateOutFileNames, extVariable, segTagsVariable, segNumIntVariable, selectedSegNumVariable, selectedSegNumIntVariable, GeneratedOutFileNames } from '../util/outputNameTemplate';
 import useUserSettings from '../hooks/useUserSettings';
 import Switch from './Switch';
 import Select from './Select';
 import TextInput from './TextInput';
+import Button from './Button';
+import * as Dialog from './Dialog';
+import { dangerColor, warningColor } from '../colors';
 
 const electron = window.require('electron');
 
@@ -28,31 +29,33 @@ function FileNameTemplateEditor(opts: {
   setTemplate: (text: string) => void,
   defaultTemplate: string,
   generateFileNames: GenerateOutFileNames,
+  ignoreMissingExtensionWarning?: boolean,
 } & ({
   currentSegIndexSafe: number,
-  mergeMode?: false
+  mode: 'separate'
 } | {
-  mergeMode: true
+  mode: 'merge-segments' | 'merge-files'
 })) {
-  const { template: templateIn, setTemplate, defaultTemplate, generateFileNames, mergeMode } = opts;
+  const { template: templateIn, setTemplate, defaultTemplate, generateFileNames, mode } = opts;
 
   const { safeOutputFileName, toggleSafeOutputFileName, outputFileNameMinZeroPadding, setOutputFileNameMinZeroPadding, simpleMode } = useUserSettings();
 
   const [text, setText] = useState(templateIn);
   const [debouncedText] = useDebounce(text, 500);
-  const [validText, setValidText] = useState<string>();
-  const [problems, setProblems] = useState<{ error?: string | undefined, sameAsInputFileNameWarning?: boolean | undefined }>({ error: undefined, sameAsInputFileNameWarning: false });
-  const [fileNames, setFileNames] = useState<string[]>();
+  const [generated, setGenerated] = useState<GeneratedOutFileNames>();
 
-  const haveImportantMessage = problems.error != null || problems.sameAsInputFileNameWarning;
-  const [shown, setShown] = useState(haveImportantMessage);
+  const haveImportantMessage = generated != null && (generated.problems.error != null || generated.problems.sameAsInputFileNameWarning);
+  const [open, setOpen] = useState(haveImportantMessage || (simpleMode && mode === 'merge-files'));
+
   useEffect(() => {
     // if an important message appears, make sure we don't auto-close after it's resolved
     // https://github.com/mifi/lossless-cut/issues/2567
-    if (haveImportantMessage) setShown(true);
+    if (haveImportantMessage) setOpen(true);
   }, [haveImportantMessage]);
 
-  const needToShow = shown || haveImportantMessage;
+  useEffect(() => {
+    setText(templateIn);
+  }, [templateIn]);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -70,70 +73,60 @@ function FileNameTemplateEditor(opts: {
     (async () => {
       try {
         // console.time('generateFileNames')
-        const outSegs = await generateFileNames(debouncedText);
-        // console.timeEnd('generateOutSegFileNames')
+        const newGenerated = await generateFileNames(debouncedText);
+        // console.timeEnd('generateCutFileNames')
         if (abortController.signal.aborted) return;
-        setFileNames(outSegs.originalFileNames ?? outSegs.fileNames);
-        setProblems(outSegs.problems);
-        setValidText(outSegs.problems.error == null ? debouncedText : undefined);
+        setGenerated(newGenerated);
       } catch (err) {
-        console.error(err);
-        setValidText(undefined);
-        setProblems({ error: err instanceof Error ? err.message : String(err) });
+        console.error(err); // shouldn't really happen
       }
     })();
 
     return () => abortController.abort();
   }, [debouncedText, generateFileNames, t]);
 
-  const availableVariables = useMemo(() => (mergeMode
-    ? ['FILENAME', extVariable, 'EPOCH_MS', 'EXPORT_COUNT', 'FILE_EXPORT_COUNT', 'SEG_LABEL']
-    : [
-      'FILENAME', extVariable, 'EPOCH_MS', 'EXPORT_COUNT', 'FILE_EXPORT_COUNT', 'SEG_LABEL',
-      'CUT_FROM',
-      ...(!simpleMode ? ['CUT_FROM_NUM'] : []),
-      'CUT_TO',
-      ...(!simpleMode ? ['CUT_TO_NUM'] : []),
-      'CUT_DURATION',
-      segNumVariable,
-      ...(!simpleMode ? [segNumIntVariable] : []),
-      selectedSegNumVariable,
-      ...(!simpleMode ? [selectedSegNumIntVariable] : []),
-      segSuffixVariable, segTagsExample,
-    ]
-  ), [mergeMode, simpleMode]);
+  const availableVariables = useMemo(() => {
+    const common = ['FILENAME', extVariable, 'EPOCH_MS', 'SEG_LABEL', 'EXPORT_COUNT'];
+    if (mode === 'merge-segments') {
+      return [...common, 'FILE_EXPORT_COUNT'];
+    }
+    if (mode === 'separate') {
+      return [
+        ...common,
+        'CUT_FROM',
+        ...(!simpleMode ? ['CUT_FROM_NUM'] : []),
+        'CUT_TO',
+        ...(!simpleMode ? ['CUT_TO_NUM'] : []),
+        'CUT_DURATION',
+        segNumVariable,
+        ...(!simpleMode ? [segNumIntVariable] : []),
+        selectedSegNumVariable,
+        ...(!simpleMode ? [selectedSegNumIntVariable] : []),
+        segSuffixVariable, segTagsExample,
+      ];
+    }
+    // merge-files
+    return common;
+  }, [mode, simpleMode]);
 
-  // eslint-disable-next-line no-template-curly-in-string
-  const isMissingExtension = validText != null && !validText.endsWith(extVariableFormatted);
-
-  const onAllFilesPreviewPress = useCallback(() => {
-    if (fileNames == null) return;
-    ReactSwal.fire({
-      title: t('Resulting segment file names', { count: fileNames.length }),
-      html: (
-        <div style={{ textAlign: 'left', overflowY: 'auto', maxHeight: 400 }}>
-          {fileNames.map((f) => <div key={f} style={{ marginBottom: 7 }}>{f}</div>)}
-        </div>
-      ),
-    });
-  }, [fileNames, t]);
+  const isMissingExtension = !debouncedText.endsWith(extVariableFormatted);
 
   useEffect(() => {
-    if (validText != null) setTemplate(validText);
-  }, [validText, setTemplate]);
+    setTemplate(debouncedText);
+  }, [debouncedText, setTemplate]);
+
+  useEffect(() => {
+    if (open) inputRef.current?.focus();
+  }, [open]);
 
   const reset = useCallback(() => {
     setTemplate(defaultTemplate);
     setText(defaultTemplate);
   }, [defaultTemplate, setTemplate]);
 
-  const onHideClick = useCallback(() => {
-    if (problems.error == null) setShown(false);
-  }, [problems.error]);
-
-  const onShowClick = useCallback(() => {
-    if (!shown) setShown(true);
-  }, [shown]);
+  const handleSampleClick = useCallback(() => {
+    setOpen((v) => !v);
+  }, []);
 
   const onTextChange = useCallback<ChangeEventHandler<HTMLInputElement>>((e) => setText(e.target.value), []);
 
@@ -149,48 +142,94 @@ function FileNameTemplateEditor(opts: {
     setText(newValue);
   }, [text]);
 
+  // In simple mode for merge-files, we auto generate file name, so there will be no ${EXT} variable
+  const shouldIgnoreMissingExtension = useMemo(() => simpleMode && mode === 'merge-files', [simpleMode, mode]);
+
+  function formatCurrentSegFileOrFirst(names: string[]) {
+    if (mode === 'separate') {
+      const { currentSegIndexSafe } = opts;
+      const fileName = names[currentSegIndexSafe];
+      if (fileName != null) {
+        return fileName;
+      }
+    }
+
+    return names[0];
+  }
+
   return (
     <>
-      {fileNames != null && (
-        <div>{(mergeMode ? t('Merged output file name:') : t('Output name(s):', { count: fileNames.length }))}</div>
+      {generated != null && (
+        <div>{
+          (mode === 'merge-files' || mode === 'merge-segments')
+            ? t('Merged output file name:')
+            : t('Output name(s):', { count: generated.fileNames.length })
+          }
+        </div>
       )}
 
-      <motion.div animate={{ marginBottom: needToShow ? '1.5em' : '.3em' }}>
-        {fileNames != null && (
+      <div>
+        {generated != null && (
           <div style={{ marginBottom: '.3em' }}>
-            <HighlightedText role="button" onClick={onShowClick} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', cursor: needToShow ? undefined : 'pointer' }}>
-              {/* eslint-disable-next-line react/destructuring-assignment */}
-              {('currentSegIndexSafe' in opts ? fileNames[opts.currentSegIndexSafe] : undefined) || fileNames[0] || '-'}
-              {!needToShow && <FaEdit style={{ fontSize: '.9em', marginLeft: '.4em', verticalAlign: 'middle' }} />}
+            <HighlightedText title={open ? t('Close') : t('Edit')} role="button" onClick={handleSampleClick} style={{ wordBreak: 'break-word', cursor: 'pointer' }}>
+              {generated.problems.error != null && <FaExclamationTriangle style={{ color: dangerColor, marginRight: '.2em', verticalAlign: 'middle' }} />}
+              {generated.originalFileNames != null && formatCurrentSegFileOrFirst(generated.fileNames)}
+              <span style={generated.originalFileNames != null ? { textDecoration: 'line-through', marginLeft: '.3em', color: dangerColor } : undefined}>
+                {formatCurrentSegFileOrFirst(generated.originalFileNames ?? generated.fileNames)}
+              </span>
+              {open ? (
+                <FaCaretUp style={{ fontSize: '.9em', marginLeft: '.4em', verticalAlign: 'middle' }} />
+              ) : (
+                <FaEdit style={{ fontSize: '.9em', marginLeft: '.4em', verticalAlign: 'middle' }} />
+              )}
             </HighlightedText>
           </div>
         )}
 
         <AnimatePresence>
-          {needToShow && (
+          {open && (
             <motion.div
               key="1"
-              style={{ background: 'var(--gray-1)', padding: '.3em .5em', borderRadius: '.3em', margin: '0 -.5em' }}
-              initial={{ opacity: 0, height: 0, marginTop: 0 }}
-              animate={{ opacity: 1, height: 'auto', marginTop: '.7em' }}
-              exit={{ opacity: 0, height: 0, marginTop: 0 }}
+              style={{ border: '.1em solid var(--gray-5)', padding: '.5em .7em', borderRadius: '.3em' }}
+              initial={{ opacity: 0, height: 0, marginTop: 0, marginBottom: 0 }}
+              animate={{ opacity: 1, height: 'auto', marginTop: '.7em', marginBottom: '1em' }}
+              exit={{ opacity: 0, height: 0, marginTop: 0, marginBottom: 0 }}
             >
               <div style={{ color: 'var(--gray-11)', fontSize: '.8em' }}>{t('Output file name template')}:</div>
+
               <div style={{ display: 'flex', alignItems: 'center', marginBottom: '.2em' }}>
-                <TextInput ref={inputRef} onChange={onTextChange} value={text} autoComplete="off" autoCapitalize="off" autoCorrect="off" />
+                <TextInput ref={inputRef} onChange={onTextChange} value={text} autoComplete="off" autoCapitalize="off" autoCorrect="off" style={{ padding: '.3em' }} />
 
-                {!mergeMode && fileNames != null && <Button height={20} onClick={onAllFilesPreviewPress} marginLeft={5}>{t('Preview')}</Button>}
+                {generated != null && generated.fileNames.length > 1 && (
+                  <Dialog.Root>
+                    <Dialog.Trigger asChild>
+                      <Button style={{ marginLeft: '.3em', padding: '.3em' }} title={t('Preview')}><FaEye /></Button>
+                    </Dialog.Trigger>
 
-                <IconButton title={t('Reset')} icon={ResetIcon} height={20} onClick={reset} marginLeft={5} intent="danger" />
-                {!haveImportantMessage && <IconButton title={t('Close')} icon={TickIcon} height={20} onClick={onHideClick} marginLeft={5} intent="success" appearance="primary" />}
+                    <Dialog.Portal>
+                      <Dialog.Overlay />
+                      <Dialog.Content aria-describedby={undefined}>
+                        <Dialog.Title>{t('Resulting segment file names', { count: generated.fileNames.length })}</Dialog.Title>
+
+                        <div style={{ overflowY: 'auto', maxHeight: 400 }}>
+                          {generated.fileNames.map((f) => <div key={f} style={{ marginBottom: '.5em' }}><FaFile style={{ verticalAlign: 'middle', marginRight: '.5em' }} />{f}</div>)}
+                        </div>
+
+                        <Dialog.CloseButton />
+                      </Dialog.Content>
+                    </Dialog.Portal>
+                  </Dialog.Root>
+                )}
+
+                <Button title={t('Reset')} onClick={reset} style={{ marginLeft: '.3em', padding: '.3em' }}><FaUndo style={{ fontSize: '.8em', color: dangerColor }} /></Button>
               </div>
 
-              <div style={{ fontSize: '.8em', color: 'var(--gray-11)', display: 'flex', gap: '.3em', flexWrap: 'wrap', alignItems: 'center', marginBottom: '.7em' }}>
+              <div style={{ fontSize: '.9em', color: 'var(--gray-11)', display: 'flex', gap: '.3em', flexWrap: 'wrap', alignItems: 'center', marginBottom: '.7em' }}>
                 {`${i18n.t('Variables')}:`}
 
                 <IoIosHelpCircle fontSize="1.3em" color="var(--gray-12)" role="button" cursor="pointer" onClick={() => electron.shell.openExternal('https://github.com/mifi/lossless-cut/blob/master/docs.md#custom-exported-file-names')} />
                 {availableVariables.map((variable) => (
-                  <span key={variable} role="button" style={{ cursor: 'pointer', marginRight: '.2em', textDecoration: 'underline', textDecorationStyle: 'dashed', fontSize: '.9em' }} onClick={() => onVariableClick(variable)}>{variable}</span>
+                  <span key={variable} role="button" style={{ cursor: 'copy', marginRight: '.2em', textDecoration: 'underline', textDecorationStyle: 'dashed', fontSize: '.9em' }} onClick={() => onVariableClick(variable)}>{variable}</span>
                 ))}
               </div>
 
@@ -207,34 +246,36 @@ function FileNameTemplateEditor(opts: {
                 <Switch checked={safeOutputFileName} onCheckedChange={toggleSafeOutputFileName} style={{ verticalAlign: 'middle', marginRight: '.5em' }} />
                 <span>{t('Sanitize file names')}</span>
 
-                {!safeOutputFileName && <WarningSignIcon color="var(--amber-9)" style={{ marginLeft: '.5em', verticalAlign: 'middle' }} />}
+                {!safeOutputFileName && <FaExclamationTriangle color={warningColor} style={{ marginLeft: '.5em', verticalAlign: 'middle' }} />}
               </div>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {problems.error != null ? (
+        {generated?.problems.error != null ? (
           <div style={{ marginBottom: '1em' }}>
-            <ErrorIcon color="var(--red-9)" size={14} verticalAlign="baseline" /> {problems.error}
+            <FaExclamationTriangle color={dangerColor} style={{ verticalAlign: 'middle', marginRight: '.3em' }} />{generated.problems.error}
           </div>
         ) : (
-          <>
-            {problems.sameAsInputFileNameWarning && (
-              <div style={{ marginBottom: '1em' }}>
-                <WarningSignIcon verticalAlign="middle" color="var(--amber-9)" />{' '}
-                {i18n.t('Output file name is the same as the source file name. This increases the risk of accidentally overwriting or deleting source files!')}
-              </div>
-            )}
+          generated != null && (
+            <>
+              {generated.problems.sameAsInputFileNameWarning && (
+                <div style={{ marginBottom: '1em' }}>
+                  <FaExclamationTriangle style={{ verticalAlign: 'middle', marginRight: '.3em' }} color={warningColor} />
+                  {i18n.t('Output file name is the same as the source file name. This increases the risk of accidentally overwriting or deleting source files!')}
+                </div>
+              )}
 
-            {isMissingExtension && (
-              <div style={{ marginBottom: '1em' }}>
-                <WarningSignIcon verticalAlign="middle" color="var(--amber-9)" />{' '}
-                {i18n.t('The file name template is missing {{ext}} and will result in a file without the suggested extension. This may result in an unplayable output file.', { ext: extVariableFormatted })}
-              </div>
-            )}
-          </>
+              {!shouldIgnoreMissingExtension && isMissingExtension && (
+                <div style={{ marginBottom: '1em' }}>
+                  <FaExclamationTriangle style={{ verticalAlign: 'middle', marginRight: '.3em' }} color={warningColor} />
+                  {i18n.t('The file name template is missing {{ext}} and will result in a file without the suggested extension. This may result in an unplayable output file.', { ext: extVariableFormatted })}
+                </div>
+              )}
+            </>
+          )
         )}
-      </motion.div>
+      </div>
     </>
   );
 }
