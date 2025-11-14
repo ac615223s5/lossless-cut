@@ -1,10 +1,11 @@
 import { CSSProperties, ReactNode } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-import styles from './ExportDialog.module.css';
+import styles from './ExportSheet.module.css';
 import CloseButton from './CloseButton';
 
-function ExportDialog({
+// TODO use Dialog component instead, but we need to first remove usage of sweetalert2 inside export confirm because they don't play well together
+function ExportSheet({
   visible,
   children,
   renderBottom,
@@ -15,7 +16,7 @@ function ExportDialog({
 } : {
   visible: boolean,
   renderBottom?: (() => ReactNode | null) | undefined,
-  renderButton?: (() => ReactNode | null) | undefined,
+  renderButton: (() => ReactNode | null),
   children: ReactNode,
   onClosePress: () => void,
   title: string,
@@ -34,7 +35,7 @@ function ExportDialog({
             transition={{ duration: 0.3, easings: ['easeOut'] }}
           >
             <div className={styles['box']} style={{ width }}>
-              <h1 style={{ textTransform: 'uppercase', fontSize: '1.4em', marginTop: 0, marginBottom: '.5em' }}>{title}</h1>
+              <h1 style={{ fontSize: '1.4em', marginTop: 0, marginBottom: '.5em' }}>{title}</h1>
 
               <CloseButton type="submit" style={{ top: 0, right: 0 }} onClick={onClosePress} />
 
@@ -43,15 +44,17 @@ function ExportDialog({
           </motion.div>
 
           <div style={{ position: 'fixed', right: 0, bottom: 0, display: 'flex', alignItems: 'center', margin: 5 }}>
-            <motion.div
-              initial={{ opacity: 0, translateX: 50 }}
-              animate={{ opacity: 1, translateX: 0 }}
-              exit={{ opacity: 0, translateX: 50 }}
-              transition={{ duration: 0.4, easings: ['easeOut'] }}
-              style={{ display: 'flex', alignItems: 'flex-end', background: 'var(--gray-2)', borderRadius: '.5em', padding: '.3em' }}
-            >
-              {renderBottom?.()}
-            </motion.div>
+            {renderBottom != null && (
+              <motion.div
+                initial={{ opacity: 0, translateX: 50 }}
+                animate={{ opacity: 1, translateX: 0 }}
+                exit={{ opacity: 0, translateX: 50 }}
+                transition={{ duration: 0.4, easings: ['easeOut'] }}
+                style={{ display: 'flex', alignItems: 'flex-end', background: 'var(--gray-2)', borderRadius: '.5em', padding: '.3em' }}
+              >
+                {renderBottom?.()}
+              </motion.div>
+            )}
 
             <motion.div
               style={{ transformOrigin: 'bottom right' }}
@@ -60,7 +63,7 @@ function ExportDialog({
               exit={{ scale: 0.7, opacity: 0 }}
               transition={{ duration: 0.4, easings: ['easeOut'] }}
             >
-              {renderButton?.()}
+              {renderButton()}
             </motion.div>
           </div>
         </>
@@ -69,4 +72,4 @@ function ExportDialog({
   );
 }
 
-export default ExportDialog;
+export default ExportSheet;

@@ -1,12 +1,15 @@
 import React, { useContext } from 'react';
 import Color from 'color';
+import invariant from 'tiny-invariant';
 
-import useUserSettingsRoot from './hooks/useUserSettingsRoot';
-import { ExportMode, SegmentColorIndex } from './types';
+import { UserSettingsRoot } from './hooks/useUserSettingsRoot';
+import { ExportMode, KeyboardLayoutMap, SegmentColorIndex } from './types';
 import type useLoading from './hooks/useLoading';
+import { GenericError } from './components/ErrorDialog';
+import { ShowGenericDialog } from './components/GenericDialog';
 
 
-export type UserSettingsContextType = ReturnType<typeof useUserSettingsRoot> & {
+export type UserSettingsContextType = Omit<UserSettingsRoot, 'settings'> & UserSettingsRoot['settings'] & {
   toggleCaptureFormat: () => void,
   changeOutDir: () => Promise<void>,
   toggleKeyframeCut: (showMessage?: boolean) => void,
@@ -16,13 +19,20 @@ export type UserSettingsContextType = ReturnType<typeof useUserSettingsRoot> & {
   effectiveExportMode: ExportMode,
 }
 
-interface SegColorsContextType {
-  getSegColor: (seg: SegmentColorIndex | undefined) => Color
+export interface SegColorsContextType {
+  getSegColor: (seg: SegmentColorIndex | undefined) => Color,
+  nextSegColorIndex: number,
 }
 
-interface AppContextType {
+export type HandleError = (error: GenericError) => void;
+
+export interface AppContextType {
   setWorking: ReturnType<typeof useLoading>['setWorking'],
   working: ReturnType<typeof useLoading>['working'],
+  handleError: HandleError,
+  showGenericDialog: ShowGenericDialog,
+  keyboardLayoutMap: KeyboardLayoutMap | undefined,
+  updateKeyboardLayout: () => Promise<void>,
 }
 
 
@@ -30,8 +40,14 @@ export const UserSettingsContext = React.createContext<UserSettingsContextType |
 export const SegColorsContext = React.createContext<SegColorsContextType | undefined>(undefined);
 export const AppContext = React.createContext<AppContextType | undefined>(undefined);
 
+export function useAppContext() {
+  const context = useContext(AppContext);
+  invariant(context != null);
+  return context;
+}
+
 export const useSegColors = () => {
   const context = useContext(SegColorsContext);
-  if (context == null) throw new Error('SegColorsContext nullish');
+  invariant(context != null);
   return context;
 };

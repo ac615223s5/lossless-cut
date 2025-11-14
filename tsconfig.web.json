@@ -1,13 +1,15 @@
 {
   "extends": ["@tsconfig/strictest", "@tsconfig/vite-react/tsconfig.json"],
   "compilerOptions": {
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "target": "esnext",
     "noEmit": true,
 
     "types": ["vite/client"],
   },
   "references": [
     { "path": "./tsconfig.main.json" },
+    { "path": "./tsconfig.common.json" },
   ],
   "include": [
     "src/renderer/**/*",

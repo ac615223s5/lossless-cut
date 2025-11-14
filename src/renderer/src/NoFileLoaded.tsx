@@ -1,21 +1,26 @@
 import { Fragment, memo, useMemo, useState } from 'react';
 import { motion, MotionStyle } from 'framer-motion';
-
+import { FaMouse } from 'react-icons/fa';
 import { useTranslation, Trans } from 'react-i18next';
 
 import SetCutpointButton from './components/SetCutpointButton';
 import SimpleModeButton from './components/SimpleModeButton';
 import useUserSettings from './hooks/useUserSettings';
 import { StateSegment } from './types';
-import { KeyBinding, KeyboardAction } from '../../../types';
+import { KeyBinding } from '../../common/types';
 import { splitKeyboardKeys } from './util';
+import { getModifier } from './hooks/useTimelineScroll';
+import Kbd from './components/Kbd';
 
 const electron = window.require('electron');
 
-function Keys({ keys }: { keys: string }) {
+function Keys({ keys }: { keys: string | undefined }) {
+  if (keys == null || keys === '') {
+    return <kbd>UNBOUND</kbd>;
+  }
   const split = splitKeyboardKeys(keys);
   return split.map((key, i) => (
-    <Fragment key={key}><kbd>{key.toUpperCase()}</kbd>{i < split.length - 1 && <span style={{ fontSize: '.7em', marginLeft: '-.2em', marginRight: '-.2em' }}>{' + '}</span>}</Fragment>
+    <Fragment key={key}><Kbd code={key} />{i < split.length - 1 && <span style={{ fontSize: '.7em', marginLeft: '-.2em', marginRight: '-.2em' }}>{' + '}</span>}</Fragment>
   ));
 }
 
@@ -42,10 +47,10 @@ function NoFileLoaded({ mifiLink, currentCutSeg, onClick, darkMode, keyBindingBy
   currentCutSeg: StateSegment | undefined,
   onClick: () => void,
   darkMode?: boolean,
-  keyBindingByAction: Record<KeyboardAction, KeyBinding>,
+  keyBindingByAction: Record<string, KeyBinding>,
 }) {
   const { t } = useTranslation();
-  const { simpleMode } = useUserSettings();
+  const { simpleMode, segmentMouseModifierKey } = useUserSettings();
   const [dragging, setDragging] = useState(false);
 
   const currentCutSegOrDefault = useMemo(() => currentCutSeg ?? { segColorIndex: 0 }, [currentCutSeg]);
@@ -60,21 +65,21 @@ function NoFileLoaded({ mifiLink, currentCutSeg, onClick, darkMode, keyBindingBy
       role="button"
       onClick={onClick}
     >
-      <div style={{ fontSize: '2em', textTransform: 'uppercase', color: 'var(--gray-11)', marginBottom: '.2em' }}>{t('DROP FILE(S)')}</div>
+      <div style={{ fontSize: '1.7em', textTransform: 'uppercase', color: 'var(--gray-11)', marginBottom: '.1em' }}>{t('DROP FILE(S)')}</div>
 
       <div style={{ fontSize: '1.3em', color: 'var(--gray-11)', marginBottom: '.1em' }}>
         <Trans>See <b>Help</b> menu for help</Trans>
       </div>
 
       <div style={{ fontSize: '1.3em', color: 'var(--gray-11)' }}>
-        <Trans><SetCutpointButton currentCutSeg={currentCutSegOrDefault} side="start" style={{ verticalAlign: 'middle' }} /> <SetCutpointButton currentCutSeg={currentCutSegOrDefault} side="end" style={{ verticalAlign: 'middle' }} /> or <Keys keys={keyBindingByAction.setCutStart.keys} /> <Keys keys={keyBindingByAction.setCutEnd.keys} /> to set cutpoints</Trans>
+        <Trans><SetCutpointButton currentCutSeg={currentCutSegOrDefault} side="start" style={{ verticalAlign: 'middle' }} /> <SetCutpointButton currentCutSeg={currentCutSegOrDefault} side="end" style={{ verticalAlign: 'middle' }} />, <Keys keys={keyBindingByAction['setCutStart']?.keys} /> <Keys keys={keyBindingByAction['setCutEnd']?.keys} /> or <span><kbd style={{ marginRight: '.1em' }}>{getModifier(segmentMouseModifierKey)}</kbd></span>+<FaMouse style={{ marginRight: '.1em', verticalAlign: 'middle' }} /> to set cutpoints</Trans>
       </div>
 
       <div style={{ fontSize: '1.3em', color: 'var(--gray-11)' }} role="button" onClick={(e) => e.stopPropagation()}>
         {simpleMode ? (
-          <Trans><SimpleModeButton style={{ verticalAlign: 'middle' }} size={16} /> to show advanced view</Trans>
+          <Trans><SimpleModeButton style={{ verticalAlign: 'middle' }} /> to show advanced view</Trans>
         ) : (
-          <Trans><SimpleModeButton style={{ verticalAlign: 'middle' }} size={16} /> to show simple view</Trans>
+          <Trans><SimpleModeButton style={{ verticalAlign: 'middle' }} /> to show simple view</Trans>
         )}
       </div>
 

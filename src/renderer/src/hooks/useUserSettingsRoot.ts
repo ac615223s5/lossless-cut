@@ -2,18 +2,18 @@ import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import i18n from 'i18next';
 import { Transition } from 'framer-motion';
 
-import { Config } from '../../../../types';
+import { Config } from '../../../common/types.js';
 
 import { errorToast } from '../swal';
 import isDev from '../isDev';
-import { mySpring, setPrefersReducedMotion } from '../animations';
+import { mySpring, emitter as animationsEmitter } from '../animations';
 
 const { configStore } = window.require('@electron/remote').require('./index.js');
 const { systemPreferences } = window.require('@electron/remote');
 
 const animationSettings = systemPreferences.getAnimationSettings();
 
-export default () => {
+export default function useUserSettingsRoot() {
   const firstUpdateRef = useRef(true);
 
   function safeSetConfig<T extends keyof Config>(keyValue: Record<T, Config[T]>) {
@@ -35,10 +35,12 @@ export default () => {
 
   function safeGetConfig<T extends keyof Config>(key: T) {
     const rawVal = configStore.get(key);
-    if (rawVal === undefined) return undefined as typeof rawVal;
     // NOTE: Need to clone any non-primitive in renderer, or it will become very slow
     // I think because Electron is proxying objects over the bridge
-    const cloned: typeof rawVal = JSON.parse(JSON.stringify(rawVal));
+    const cloned: typeof rawVal = rawVal === undefined
+      ? undefined
+      : JSON.parse(JSON.stringify(rawVal));
+
     return cloned;
   }
 
@@ -47,6 +49,8 @@ export default () => {
   // Without this there was a huge performance issue https://github.com/mifi/lossless-cut/issues/1097
   const safeGetConfigInitial = <T extends keyof Config>(key: T) => () => safeGetConfig(key);
 
+  const [lastAppVersion, setLastAppVersion] = useState(safeGetConfigInitial('lastAppVersion'));
+  useEffect(() => safeSetConfig({ lastAppVersion }), [lastAppVersion]);
   const [captureFormat, setCaptureFormat] = useState(safeGetConfigInitial('captureFormat'));
   useEffect(() => safeSetConfig({ captureFormat }), [captureFormat]);
   const [customOutDir, setCustomOutDir] = useState(safeGetConfigInitial('customOutDir'));
@@ -59,6 +63,8 @@ export default () => {
   useEffect(() => safeSetConfig({ preserveMetadataOnMerge }), [preserveMetadataOnMerge]);
   const [preserveMovData, setPreserveMovData] = useState(safeGetConfigInitial('preserveMovData'));
   useEffect(() => safeSetConfig({ preserveMovData }), [preserveMovData]);
+  const [fixCodecTag, setFixCodecTag] = useState(safeGetConfigInitial('fixCodecTag'));
+  useEffect(() => safeSetConfig({ fixCodecTag }), [fixCodecTag]);
   const [preserveChapters, setPreserveChapters] = useState(safeGetConfigInitial('preserveChapters'));
   useEffect(() => safeSetConfig({ preserveChapters }), [preserveChapters]);
   const [movFastStart, setMovFastStart] = useState(safeGetConfigInitial('movFastStart'));
@@ -107,10 +113,12 @@ export default () => {
   useEffect(() => safeSetConfig({ segmentsToChapters }), [segmentsToChapters]);
   const [simpleMode, setSimpleMode] = useState(safeGetConfigInitial('simpleMode'));
   useEffect(() => safeSetConfig({ simpleMode }), [simpleMode]);
-  const [outSegTemplate, setOutSegTemplate] = useState(safeGetConfigInitial('outSegTemplate'));
-  useEffect(() => safeSetConfig({ outSegTemplate }), [outSegTemplate]);
-  const [mergedFileTemplate, setMergedFileTemplate] = useState(safeGetConfigInitial('mergedFileTemplate'));
-  useEffect(() => safeSetConfig({ mergedFileTemplate }), [mergedFileTemplate]);
+  const [cutFileTemplate, setCutFileTemplate] = useState(safeGetConfigInitial('outSegTemplate'));
+  useEffect(() => safeSetConfig({ outSegTemplate: cutFileTemplate }), [cutFileTemplate]);
+  const [cutMergedFileTemplate, setCutMergedFileTemplate] = useState(safeGetConfigInitial('mergedFileTemplate'));
+  useEffect(() => safeSetConfig({ mergedFileTemplate: cutMergedFileTemplate }), [cutMergedFileTemplate]);
+  const [mergedFileTemplate, setMergedFileTemplate] = useState(safeGetConfigInitial('mergedFilesTemplate'));
+  useEffect(() => safeSetConfig({ mergedFilesTemplate: mergedFileTemplate }), [mergedFileTemplate]);
   const [keyboardSeekAccFactor, setKeyboardSeekAccFactor] = useState(safeGetConfigInitial('keyboardSeekAccFactor'));
   useEffect(() => safeSetConfig({ keyboardSeekAccFactor }), [keyboardSeekAccFactor]);
   const [keyboardNormalSeekSpeed, setKeyboardNormalSeekSpeed] = useState(safeGetConfigInitial('keyboardNormalSeekSpeed'));
@@ -149,6 +157,8 @@ export default () => {
   useEffect(() => safeSetConfig({ mouseWheelFrameSeekModifierKey }), [mouseWheelFrameSeekModifierKey]);
   const [mouseWheelKeyframeSeekModifierKey, setMouseWheelKeyframeSeekModifierKey] = useState(safeGetConfigInitial('mouseWheelKeyframeSeekModifierKey'));
   useEffect(() => safeSetConfig({ mouseWheelKeyframeSeekModifierKey }), [mouseWheelKeyframeSeekModifierKey]);
+  const [segmentMouseModifierKey, setSegmentMouseModifierKey] = useState(safeGetConfigInitial('segmentMouseModifierKey'));
+  useEffect(() => safeSetConfig({ segmentMouseModifierKey }), [segmentMouseModifierKey]);
   const [captureFrameMethod, setCaptureFrameMethod] = useState(safeGetConfigInitial('captureFrameMethod'));
   useEffect(() => safeSetConfig({ captureFrameMethod }), [captureFrameMethod]);
   const [captureFrameQuality, setCaptureFrameQuality] = useState(safeGetConfigInitial('captureFrameQuality'));
@@ -208,148 +218,163 @@ export default () => {
   }, [reducedMotion]);
 
   useEffect(() => {
-    setPrefersReducedMotion(prefersReducedMotion);
+    animationsEmitter.emit('reducedMotion', prefersReducedMotion);
   }, [prefersReducedMotion]);
 
   const springAnimation = useMemo<Transition>(() => (prefersReducedMotion ? { duration: 0 } : mySpring), [prefersReducedMotion]);
 
-  return {
+  const settings = {
+    lastAppVersion,
     captureFormat,
-    setCaptureFormat,
     customOutDir,
-    setCustomOutDir,
     keyframeCut,
-    setKeyframeCut,
     preserveMetadata,
-    setPreserveMetadata,
     preserveMetadataOnMerge,
-    setPreserveMetadataOnMerge,
     preserveMovData,
-    setPreserveMovData,
     preserveChapters,
-    setPreserveChapters,
+    fixCodecTag,
     movFastStart,
-    setMovFastStart,
     avoidNegativeTs,
-    setAvoidNegativeTs,
     autoMerge,
-    setAutoMerge,
     timecodeFormat,
-    setTimecodeFormat,
     invertCutSegments,
-    setInvertCutSegments,
     autoExportExtraStreams,
-    setAutoExportExtraStreams,
     askBeforeClose,
-    setAskBeforeClose,
     enableAskForImportChapters,
-    setEnableAskForImportChapters,
     enableAskForFileOpenAction,
-    setEnableAskForFileOpenAction,
     playbackVolume,
-    setPlaybackVolume,
     autoSaveProjectFile,
-    setAutoSaveProjectFile,
     wheelSensitivity,
-    setWheelSensitivity,
     waveformHeight,
-    setWaveformHeight,
     invertTimelineScroll,
-    setInvertTimelineScroll,
     language,
-    setLanguage,
     ffmpegExperimental,
-    setFfmpegExperimental,
     hideNotifications,
-    setHideNotifications,
     hideOsNotifications,
-    setHideOsNotifications,
     autoLoadTimecode,
-    setAutoLoadTimecode,
     autoDeleteMergedSegments,
-    setAutoDeleteMergedSegments,
     exportConfirmEnabled,
-    setExportConfirmEnabled,
     segmentsToChapters,
-    setSegmentsToChapters,
     simpleMode,
-    setSimpleMode,
-    outSegTemplate,
-    setOutSegTemplate,
+    cutFileTemplate,
+    cutMergedFileTemplate,
     mergedFileTemplate,
-    setMergedFileTemplate,
     keyboardSeekAccFactor,
-    setKeyboardSeekAccFactor,
     keyboardNormalSeekSpeed,
-    setKeyboardNormalSeekSpeed,
     keyboardSeekSpeed2,
-    setKeyboardSeekSpeed2,
     keyboardSeekSpeed3,
-    setKeyboardSeekSpeed3,
     treatInputFileModifiedTimeAsStart,
-    setTreatInputFileModifiedTimeAsStart,
     treatOutputFileModifiedTimeAsStart,
-    setTreatOutputFileModifiedTimeAsStart,
     outFormatLocked,
-    setOutFormatLocked,
     safeOutputFileName,
-    setSafeOutputFileName,
     enableAutoHtml5ify,
-    setEnableAutoHtml5ify,
     segmentsToChaptersOnly,
-    setSegmentsToChaptersOnly,
     keyBindings,
+    enableSmartCut,
+    customFfPath,
+    storeProjectInWorkingDir,
+    enableOverwriteOutput,
+    mouseWheelZoomModifierKey,
+    mouseWheelFrameSeekModifierKey,
+    mouseWheelKeyframeSeekModifierKey,
+    segmentMouseModifierKey,
+    captureFrameMethod,
+    captureFrameQuality,
+    captureFrameFileNameFormat,
+    enableNativeHevc,
+    enableUpdateCheck,
+    cleanupChoices,
+    allowMultipleInstances,
+    darkMode,
+    preferStrongColors,
+    outputFileNameMinZeroPadding,
+    cutFromAdjustmentFrames,
+    cutToAdjustmentFrames,
+    storeWindowBounds,
+    waveformMode,
+    thumbnailsEnabled,
+    keyframesEnabled,
+    reducedMotion,
+  };
+
+  return {
+    settings,
+
+    setLastAppVersion,
+    setCaptureFormat,
+    setCustomOutDir,
+    setKeyframeCut,
+    setPreserveMetadata,
+    setPreserveMetadataOnMerge,
+    setPreserveMovData,
+    setPreserveChapters,
+    setFixCodecTag,
+    setMovFastStart,
+    setAvoidNegativeTs,
+    setAutoMerge,
+    setTimecodeFormat,
+    setInvertCutSegments,
+    setAutoExportExtraStreams,
+    setAskBeforeClose,
+    setEnableAskForImportChapters,
+    setEnableAskForFileOpenAction,
+    setPlaybackVolume,
+    setAutoSaveProjectFile,
+    setWheelSensitivity,
+    setWaveformHeight,
+    setInvertTimelineScroll,
+    setLanguage,
+    setFfmpegExperimental,
+    setHideNotifications,
+    setHideOsNotifications,
+    setAutoLoadTimecode,
+    setAutoDeleteMergedSegments,
+    setExportConfirmEnabled,
+    setSegmentsToChapters,
+    setSimpleMode,
+    setCutFileTemplate,
+    setCutMergedFileTemplate,
+    setMergedFileTemplate,
+    setKeyboardSeekAccFactor,
+    setKeyboardNormalSeekSpeed,
+    setKeyboardSeekSpeed2,
+    setKeyboardSeekSpeed3,
+    setTreatInputFileModifiedTimeAsStart,
+    setTreatOutputFileModifiedTimeAsStart,
+    setOutFormatLocked,
+    setSafeOutputFileName,
+    setEnableAutoHtml5ify,
+    setSegmentsToChaptersOnly,
     setKeyBindings,
     resetKeyBindings,
-    enableSmartCut,
     setEnableSmartCut,
-    customFfPath,
     setCustomFfPath,
-    storeProjectInWorkingDir,
     setStoreProjectInWorkingDir,
-    enableOverwriteOutput,
     setEnableOverwriteOutput,
-    mouseWheelZoomModifierKey,
     setMouseWheelZoomModifierKey,
-    mouseWheelFrameSeekModifierKey,
     setMouseWheelFrameSeekModifierKey,
-    mouseWheelKeyframeSeekModifierKey,
     setMouseWheelKeyframeSeekModifierKey,
-    captureFrameMethod,
+    setSegmentMouseModifierKey,
     setCaptureFrameMethod,
-    captureFrameQuality,
     setCaptureFrameQuality,
-    captureFrameFileNameFormat,
     setCaptureFrameFileNameFormat,
-    enableNativeHevc,
     setEnableNativeHevc,
-    enableUpdateCheck,
     setEnableUpdateCheck,
-    cleanupChoices,
     setCleanupChoices,
-    allowMultipleInstances,
     setAllowMultipleInstances,
-    darkMode,
     toggleDarkMode,
-    preferStrongColors,
     setPreferStrongColors,
-    outputFileNameMinZeroPadding,
     setOutputFileNameMinZeroPadding,
-    cutFromAdjustmentFrames,
     setCutFromAdjustmentFrames,
-    cutToAdjustmentFrames,
     setCutToAdjustmentFrames,
-    storeWindowBounds,
     setStoreWindowBounds,
-    waveformMode,
     setWaveformMode,
-    thumbnailsEnabled,
     setThumbnailsEnabled,
-    keyframesEnabled,
     setKeyframesEnabled,
-    reducedMotion,
     prefersReducedMotion,
     setReducedMotion,
     springAnimation,
   };
-};
+}
+
+export type UserSettingsRoot = ReturnType<typeof useUserSettingsRoot>;

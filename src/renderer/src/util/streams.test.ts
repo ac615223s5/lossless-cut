@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 
 import { getMapStreamsArgs, getStreamIdsToCopy } from './streams';
-import { FFprobeStreamDisposition } from '../../../../ffprobe';
+import { FFprobeStreamDisposition } from '../../../common/ffprobe';
 import { LiteFFprobeStream } from '../types';
 
 
@@ -52,6 +52,7 @@ test('getMapStreamsArgs', () => {
     allFilesMeta,
     copyFileStreams: [{ path, streamIds: streams1.map((stream) => stream.index) }],
     outFormat,
+    fixCodecTag: 'auto',
   })).toEqual([
     '-map', '0:0', '-c:0', 'copy',
     '-map', '0:1', '-c:1', 'copy',

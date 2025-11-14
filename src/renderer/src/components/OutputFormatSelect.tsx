@@ -1,33 +1,37 @@
 import { CSSProperties, memo, useMemo } from 'react';
 import i18n from 'i18next';
 
-import allOutFormats from '../outFormats';
+import allOutFormats, { FfmpegFormat } from '../outFormats';
 import { withBlur } from '../util';
 import Select from './Select';
 
-const commonVideoAudioFormats = ['matroska', 'mov', 'mp4', 'mpegts', 'ogv', 'webm'];
-const commonAudioFormats = ['flac', 'ipod', 'mp3', 'oga', 'ogg', 'opus', 'wav'];
-const commonSubtitleFormats = ['ass', 'srt', 'sup', 'webvtt'];
+const commonVideoAudioFormats = ['matroska', 'mov', 'mp4', 'mpegts', 'ogv', 'webm'] as const;
+const commonAudioFormats = ['flac', 'ipod', 'mp3', 'oga', 'ogg', 'opus', 'wav'] as const;
+const commonSubtitleFormats = ['ass', 'srt', 'sup', 'webvtt'] as const;
 
-function renderFormatOptions(formats: string[]) {
+function renderFormatOptions(formats: FfmpegFormat[]) {
   return formats.map((format) => (
-    <option key={format} value={format}>{format} - {(allOutFormats as Record<string, string>)[format]}</option>
+    <option key={format} value={format}>{format} - {allOutFormats[format]}</option>
   ));
 }
 
-function OutputFormatSelect({ style, detectedFileFormat, fileFormat, onOutputFormatUserChange }: {
-  style: CSSProperties, detectedFileFormat?: string | undefined, fileFormat?: string | undefined, onOutputFormatUserChange: (a: string) => void,
+function OutputFormatSelect({ style, disabled, detectedFileFormat, fileFormat, onOutputFormatUserChange }: {
+  style: CSSProperties,
+  disabled?: boolean,
+  detectedFileFormat?: string | undefined,
+  fileFormat?: string | undefined,
+  onOutputFormatUserChange: (a: string) => void,
 }) {
   const commonVideoAudioFormatsExceptDetectedFormat = useMemo(() => commonVideoAudioFormats.filter((f) => f !== detectedFileFormat), [detectedFileFormat]);
   const commonAudioFormatsExceptDetectedFormat = useMemo(() => commonAudioFormats.filter((f) => f !== detectedFileFormat), [detectedFileFormat]);
   const commonSubtitleFormatsExceptDetectedFormat = useMemo(() => commonSubtitleFormats.filter((f) => f !== detectedFileFormat), [detectedFileFormat]);
   const commonFormatsAndDetectedFormat = useMemo(() => new Set([...commonVideoAudioFormats, ...commonAudioFormats, commonSubtitleFormats, detectedFileFormat]), [detectedFileFormat]);
 
-  const otherFormats = useMemo(() => Object.keys(allOutFormats).filter((format) => !commonFormatsAndDetectedFormat.has(format)), [commonFormatsAndDetectedFormat]);
+  const otherFormats = useMemo(() => (Object.keys(allOutFormats) as (keyof typeof allOutFormats)[]).filter((format) => !commonFormatsAndDetectedFormat.has(format)), [commonFormatsAndDetectedFormat]);
 
   return (
     // eslint-disable-next-line react/jsx-props-no-spreading
-    <Select style={style} value={fileFormat || ''} title={i18n.t('Output container format:')} onChange={withBlur((e) => onOutputFormatUserChange(e.target.value))}>
+    <Select style={style} disabled={disabled} value={fileFormat || ''} title={i18n.t('Output container format:')} onChange={withBlur((e) => onOutputFormatUserChange(e.target.value))}>
       <option key="disabled1" value="" disabled>{i18n.t('Output container format:')}</option>
 
       {detectedFileFormat && (

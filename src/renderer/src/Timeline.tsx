@@ -17,6 +17,8 @@ import { timelineBackground, darkModeTransition } from './colors';
 import { Frame } from './ffmpeg';
 import { FormatTimecode, InverseCutSegment, OverviewWaveform, RenderableWaveform, WaveformSlice, StateSegment, Thumbnail } from './types';
 import Button from './components/Button';
+import { UseSegments } from './hooks/useSegments';
+import { keyMap } from './hooks/useTimelineScroll';
 
 
 type CalculateTimelinePercent = (time: number) => string | undefined;
@@ -95,6 +97,7 @@ function Timeline({
   cutSegments,
   setCurrentSegIndex,
   currentSegIndexSafe,
+  currentCutSeg,
   inverseCutSegments,
   formatTimecode,
   formatTimeAndFrames,
@@ -116,6 +119,7 @@ function Timeline({
   commandedTimeRef,
   goToTimecode,
   darkMode,
+  setCutTime,
 } : {
   fileDurationNonZero: number,
   startTimeOffset: number,
@@ -128,6 +132,7 @@ function Timeline({
   cutSegments: StateSegment[],
   setCurrentSegIndex: (a: number) => void,
   currentSegIndexSafe: number,
+  currentCutSeg: StateSegment | undefined,
   inverseCutSegments: InverseCutSegment[],
   formatTimecode: FormatTimecode,
   formatTimeAndFrames: (a: number) => string,
@@ -149,10 +154,11 @@ function Timeline({
   commandedTimeRef: MutableRefObject<number>,
   goToTimecode: () => void,
   darkMode: boolean,
+  setCutTime: UseSegments['setCutTime'];
 }) {
   const { t } = useTranslation();
 
-  const { invertCutSegments, springAnimation } = useUserSettings();
+  const { invertCutSegments, springAnimation, segmentMouseModifierKey } = useUserSettings();
 
   const timelineScrollerRef = useRef<HTMLDivElement>(null);
   const timelineScrollerSkipEventRef = useRef<boolean>(false);
@@ -282,26 +288,63 @@ function Timeline({
 
   const mouseDownRef = useRef<unknown>();
 
-  const handleScrub = useCallback((e: MouseEvent) => seekAbs((getMouseTimelinePos(e))), [seekAbs, getMouseTimelinePos]);
-
   useEffect(() => {
     setHoveringTime(undefined);
   }, [relevantTime]);
 
+  // for performance
+  const currentCutSegRef = useRef<StateSegment | undefined>(currentCutSeg);
+  useEffect(() => {
+    currentCutSegRef.current = currentCutSeg;
+  }, [currentCutSeg]);
+
+  const resizingSegmentRef = useRef<{ operation: 'start' | 'end' | 'move', offset?: number } | undefined>();
+
   const onMouseDown = useCallback<MouseEventHandler<HTMLElement>>((e) => {
     if (e.nativeEvent.buttons !== 1) return; // not primary button
 
-    handleScrub(e.nativeEvent);
+    const mouseTimelinePos = getMouseTimelinePos(e.nativeEvent);
+    seekAbs(mouseTimelinePos);
+
+    // eslint-disable-next-line no-shadow
+    const currentCutSeg = currentCutSegRef.current;
+
+    // start/end handles 1.5% of visible timeline
+    const threshold = ((0.01 / 2) * fileDurationNonZero) / zoom;
+
+    if (currentCutSeg != null && currentCutSeg.selected && e[keyMap[segmentMouseModifierKey]]) {
+      if (Math.abs(mouseTimelinePos - currentCutSeg.start) < threshold) {
+        resizingSegmentRef.current = { operation: currentCutSeg.end == null ? 'move' : 'start' }; // move marker or resize segment
+      } else if (currentCutSeg.end != null && Math.abs(mouseTimelinePos - currentCutSeg.end) < threshold) {
+        resizingSegmentRef.current = { operation: 'end' };
+      } else if (currentCutSeg.end != null && mouseTimelinePos >= currentCutSeg.start && mouseTimelinePos <= currentCutSeg.end) {
+        resizingSegmentRef.current = { operation: 'move', offset: mouseTimelinePos - currentCutSeg.start };
+      }
+    }
 
     mouseDownRef.current = e.target;
 
     function onMouseMove(e2: MouseEvent) {
       if (mouseDownRef.current == null) return;
-      seekAbs(getMouseTimelinePos(e2));
+      const mouseDragTimelinePos = getMouseTimelinePos(e2);
+      seekAbs(mouseDragTimelinePos);
+      try {
+        // eslint-disable-next-line unicorn/prefer-switch
+        if (resizingSegmentRef.current?.operation === 'start') {
+          setCutTime('start', mouseDragTimelinePos);
+        } else if (resizingSegmentRef?.current?.operation === 'end') {
+          setCutTime('end', mouseDragTimelinePos);
+        } else if (resizingSegmentRef?.current?.operation === 'move') {
+          setCutTime('move', mouseDragTimelinePos - (resizingSegmentRef.current.offset ?? 0));
+        }
+      } catch (err) {
+        console.warn('Error while resizing segment:', err instanceof Error ? err.message : err);
+      }
     }
 
     function onMouseUp() {
       mouseDownRef.current = undefined;
+      resizingSegmentRef.current = undefined;
       window.removeEventListener('mouseup', onMouseUp);
       window.removeEventListener('mousemove', onMouseMove);
     }
@@ -311,16 +354,23 @@ function Timeline({
     // https://stackoverflow.com/questions/6073505/what-is-the-difference-between-screenx-y-clientx-y-and-pagex-y
     window.addEventListener('mouseup', onMouseUp, { once: true });
     window.addEventListener('mousemove', onMouseMove);
-  }, [getMouseTimelinePos, handleScrub, seekAbs]);
+  }, [fileDurationNonZero, getMouseTimelinePos, seekAbs, segmentMouseModifierKey, setCutTime, zoom]);
 
   const timeRef = useRef<HTMLDivElement>(null);
+  const timeFadeTimeoutRef = useRef<NodeJS.Timeout>();
 
   const onMouseMove = useCallback<MouseEventHandler<HTMLDivElement>>((e) => {
     // need to manually check, because we cannot use css :hover when pointer-events: none
     // and we need pointer-events: none on time because we want to be able to click through it to segments behind (and they are not parent)
     const rect = timeRef.current?.getBoundingClientRect();
     const isInBounds = rect && e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
-    timeRef.current?.style.setProperty('opacity', isInBounds ? '0.2' : '1');
+    const showHide = (show: boolean) => timeRef.current?.style.setProperty('opacity', show ? '0.2' : '1');
+    if (isInBounds != null) showHide(isInBounds);
+    // console.log('isInBounds', isInBounds);
+
+    // https://github.com/mifi/lossless-cut/issues/2592#issuecomment-3476211496
+    if (timeFadeTimeoutRef.current) clearTimeout(timeFadeTimeoutRef.current);
+    timeFadeTimeoutRef.current = setTimeout(() => showHide(false), 1000);
 
     if (!mouseDownRef.current) { // no button pressed
       setHoveringTime(getMouseTimelinePos(e.nativeEvent));
@@ -423,7 +473,7 @@ function Timeline({
           })}
 
           {shouldShowKeyframes && !areKeyframesTooClose && keyFramesInZoomWindow.map((f) => (
-            <div key={f.time} style={{ position: 'absolute', top: 0, bottom: 0, left: `${(f.time / fileDurationNonZero) * 100}%`, marginLeft: -1, width: 1, background: 'var(--gray-11)', pointerEvents: 'none' }} />
+            <div key={f.time} style={{ position: 'absolute', top: 0, bottom: 0, left: `${(f.time / fileDurationNonZero) * 100}%`, marginLeft: -1, width: 1, background: 'var(--gray-10)', pointerEvents: 'none' }} />
           ))}
 
           {currentTimePercent !== undefined && (

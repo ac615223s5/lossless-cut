@@ -1,11 +1,11 @@
-import { memo, useRef, useMemo, useCallback, CSSProperties } from 'react';
+import { memo, useRef, useMemo, useCallback, CSSProperties, MouseEventHandler } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FaAngleRight, FaFile } from 'react-icons/fa';
+import { FaFile, FaTimes } from 'react-icons/fa';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
 import useContextMenu from '../hooks/useContextMenu';
-import { primaryTextColor } from '../colors';
+import { dangerColor, primaryColor, primaryTextColor } from '../colors';
 
 function BatchFile({ path, index, isOpen, isSelected, name, onSelect, onDelete, dragging }: {
   path: string,
@@ -45,13 +45,19 @@ function BatchFile({ path, index, isOpen, isSelected, name, onSelect, onDelete, 
     transform: CSS.Transform.toString(sortable.transform),
     transition: sortable.transition,
     background: isSelected ? 'var(--gray-7)' : undefined,
-    cursor: dragging ? 'grabbing' : 'pointer',
+    cursor: dragging ? 'grabbing' : 'default',
     fontSize: 13,
-    padding: '3px 6px',
+    padding: '.2em .2em .2em .4em',
     display: 'flex',
     alignItems: 'center',
     alignContent: 'flex-start',
-  }), [sortable.isDragging, sortable.transform, sortable.transition, isSelected, dragging]);
+    borderRight: `.3em solid ${isOpen ? primaryColor : 'transparent'}`,
+  }), [sortable.isDragging, sortable.transform, sortable.transition, dragging, isSelected, isOpen]);
+
+  const handleClick = useCallback<MouseEventHandler<HTMLDivElement>>((e) => {
+    onSelect?.(path);
+    e.currentTarget.blur();
+  }, [onSelect, path]);
 
   return (
     <div
@@ -61,15 +67,18 @@ function BatchFile({ path, index, isOpen, isSelected, name, onSelect, onDelete, 
       {...sortable.listeners}
       ref={setRef}
       role="button"
+      tabIndex={-1}
       style={style}
       title={path}
-      onClick={() => onSelect?.(path)}
+      onClick={handleClick}
     >
-      <FaFile size={14} style={{ color: isSelected ? primaryTextColor : undefined, flexShrink: 0 }} />
-      <div style={{ flexBasis: 4, flexShrink: 0 }} />
-      <div style={{ whiteSpace: 'nowrap', overflow: 'hidden' }}>{index + 1}. {name}</div>
+      <FaFile style={{ color: isSelected ? primaryTextColor : undefined, flexShrink: 0, fontSize: '1em', marginRight: '.1em' }} />
+      <div style={{ flexShrink: 0, marginRight: '.1em' }}>{index + 1}.</div>
+      <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', direction: 'rtl' }}>
+        <span style={{ direction: 'ltr', unicodeBidi: 'isolate', display: 'inline-block' }}>{name}</span>
+      </div>
       <div style={{ flexGrow: 1 }} />
-      {isOpen && <FaAngleRight size={14} style={{ color: 'var(--gray-9)', marginRight: -5, flexShrink: 0 }} />}
+      {onDelete && <FaTimes style={{ color: dangerColor, fontSize: '.9em', marginRight: '-.3em', flexShrink: 0, cursor: 'pointer', padding: '.3em' }} role="button" onClick={() => onDelete(path)} />}
     </div>
   );
 }

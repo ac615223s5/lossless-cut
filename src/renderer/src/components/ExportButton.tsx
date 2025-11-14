@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { CSSProperties, memo } from 'react';
 import { FiScissors } from 'react-icons/fi';
 import { FaFileExport } from 'react-icons/fa';
 import { useTranslation } from 'react-i18next';
@@ -8,17 +8,17 @@ import useUserSettings from '../hooks/useUserSettings';
 import { SegmentToExport } from '../types';
 
 
-function ExportButton({ segmentsToExport, areWeCutting, onClick, size = 1 }: {
+function ExportButton({ segmentsToExport, areWeCutting, onClick, style }: {
   segmentsToExport: SegmentToExport[],
   areWeCutting: boolean,
   onClick: () => void,
-  size?: number | undefined,
+  style?: CSSProperties,
 }) {
   const CutIcon = areWeCutting ? FiScissors : FaFileExport;
 
   const { t } = useTranslation();
 
-  const { autoMerge } = useUserSettings();
+  const { autoMerge, simpleMode } = useUserSettings();
 
   let title = t('Export');
   if (segmentsToExport.length === 1) {
@@ -30,19 +30,18 @@ function ExportButton({ segmentsToExport, areWeCutting, onClick, size = 1 }: {
   const text = autoMerge && segmentsToExport && segmentsToExport.length > 1 ? t('Export+merge') : t('Export');
 
   return (
-    <div
-      className="export-animation"
-      style={{ cursor: 'pointer', background: primaryColor, color: 'white', borderRadius: size * 5, paddingTop: size * 1, paddingBottom: size * 2.5, paddingLeft: size * 7, paddingRight: size * 7, fontSize: size * 13, whiteSpace: 'nowrap' }}
+    <button
+      type="button"
+      className={simpleMode ? 'export-animation' : undefined}
+      style={{ all: 'unset', cursor: 'pointer', background: primaryColor, color: 'white', borderRadius: '.3em', paddingBottom: '.1em', paddingLeft: '.2em', paddingRight: '.2em', whiteSpace: 'nowrap', ...style }}
       onClick={onClick}
       title={title}
-      role="button"
     >
       <CutIcon
-        style={{ verticalAlign: 'middle', marginRight: size * 4 }}
-        size={size * 15}
+        style={{ verticalAlign: 'middle', marginRight: '.2em' }}
       />
       {text}
-    </div>
+    </button>
   );
 }
 
