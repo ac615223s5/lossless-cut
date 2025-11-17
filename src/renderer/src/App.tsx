@@ -173,6 +173,8 @@ function App() {
   const { captureFormat, customOutDir, keyframeCut, preserveMetadata, preserveMetadataOnMerge, preserveMovData, fixCodecTag, preserveChapters, movFastStart, avoidNegativeTs, autoMerge, timecodeFormat, invertCutSegments, autoExportExtraStreams, askBeforeClose, enableAskForImportChapters, enableAskForFileOpenAction, playbackVolume, autoSaveProjectFile, wheelSensitivity, waveformHeight, invertTimelineScroll, language, ffmpegExperimental, hideNotifications, hideOsNotifications, autoLoadTimecode, autoDeleteMergedSegments, exportConfirmEnabled, segmentsToChapters, simpleMode, cutFileTemplate, cutMergedFileTemplate, mergedFileTemplate, keyboardSeekAccFactor, keyboardNormalSeekSpeed, keyboardSeekSpeed2, keyboardSeekSpeed3, treatInputFileModifiedTimeAsStart, treatOutputFileModifiedTimeAsStart, outFormatLocked, safeOutputFileName, enableAutoHtml5ify, segmentsToChaptersOnly, keyBindings, enableSmartCut, customFfPath, storeProjectInWorkingDir, enableOverwriteOutput, mouseWheelZoomModifierKey, mouseWheelFrameSeekModifierKey, mouseWheelKeyframeSeekModifierKey, captureFrameMethod, captureFrameQuality, captureFrameFileNameFormat, enableNativeHevc, cleanupChoices, darkMode, preferStrongColors, outputFileNameMinZeroPadding, cutFromAdjustmentFrames, cutToAdjustmentFrames, waveformMode: waveformModePreference, thumbnailsEnabled, keyframesEnabled, reducedMotion } = allUserSettings.settings;
   const { setCaptureFormat, setCustomOutDir, setKeyframeCut, setPlaybackVolume, setExportConfirmEnabled, setSimpleMode, setOutFormatLocked, setSafeOutputFileName, setKeyBindings, resetKeyBindings, setStoreProjectInWorkingDir, setCleanupChoices, toggleDarkMode, setWaveformMode, setThumbnailsEnabled, setKeyframesEnabled, prefersReducedMotion } = allUserSettings;
 
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(!simpleMode);
+
   const { withErrorHandling, handleError, genericError, setGenericError } = useErrorHandling();
 
   const { showGenericDialog, genericDialog, closeGenericDialog, confirmDialog, openExportFinishedDialog, openCutFinishedDialog, openConcatFinishedDialog, openCleanupFilesDialog } = useDialog();
@@ -203,7 +205,7 @@ function App() {
   const mergedFileTemplateOrDefault = mergedFileTemplate ?? defaultMergedFileTemplate;
 
   useEffect(() => {
-    i18n.changeLanguage(language).catch(console.error);
+    i18n.changeLanguage(language ?? undefined).catch(console.error);
     electron.ipcRenderer.send('setLanguage', language);
   }, [language]);
 
@@ -672,7 +674,7 @@ function App() {
     setUsingDummyVideo(false);
   }, [setHideCompatPlayer, setPreviewFilePath, setUsingDummyVideo]);
 
-  const { captureFrameFromTag, captureFrameFromFfmpeg, captureFrameToClipboard, captureFramesRange } = useFrameCapture({ appendFfmpegCommandLog, formatTimecode, treatInputFileModifiedTimeAsStart, treatOutputFileModifiedTimeAsStart });
+  const { captureFrameFromTag, captureFrameFromFfmpeg, captureFrameToClipboard, captureFramesRange } = useFrameCapture({ appendFfmpegCommandLog, formatTimecode, treatInputFileModifiedTimeAsStart, treatOutputFileModifiedTimeAsStart, fileDuration });
 
   const getNewJumpIndex = (oldIndex: number, direction: -1 | 1) => Math.max(oldIndex + direction, 0);
 
@@ -772,22 +774,20 @@ function App() {
     }
   }, [commandedTimeRef, cutSegments, findSegmentsAtCursor, pause, playbackModeRef, playerTime, playingRef, seekAbs, selectedSegments, setCurrentSegIndex, setPlaybackMode, setPlayerTime]);
 
-  const closeFileWithConfirm = useCallback(() => {
+  const closeFileWithConfirm = useCallback(async () => {
     if (!isFileOpened || workingRef.current) return;
 
-    // eslint-disable-next-line no-alert
-    if (askBeforeClose && !window.confirm(i18n.t('Are you sure you want to close the current file?'))) return;
+    if (askBeforeClose && !(await confirmDialog({ focusConfirm: true, description: i18n.t('Are you sure you want to close the current file?') }))) return;
 
     resetState();
     clearSegments();
-  }, [isFileOpened, workingRef, askBeforeClose, resetState, clearSegments]);
+  }, [isFileOpened, workingRef, askBeforeClose, confirmDialog, resetState, clearSegments]);
 
-  const closeBatch = useCallback(() => {
-    // eslint-disable-next-line no-alert
-    if (askBeforeClose && !window.confirm(i18n.t('Are you sure you want to close the loaded batch of files?'))) return;
+  const closeBatch = useCallback(async () => {
+    if (askBeforeClose && !(await confirmDialog({ focusConfirm: true, description: i18n.t('Are you sure you want to close the loaded batch of files?') }))) return;
     setBatchFiles([]);
     setSelectedBatchFiles([]);
-  }, [askBeforeClose]);
+  }, [askBeforeClose, confirmDialog]);
 
   const batchListRemoveFile = useCallback((path: string | undefined) => {
     setBatchFiles((existingBatch) => {
@@ -1218,7 +1218,7 @@ function App() {
           : await captureFrameFromTag({ customOutDir, filePath, time: currentTime, captureFormat, quality: captureFrameQuality, video });
 
         if (simpleMode && !prefersReducedMotion) shootConfetti();
-        if (!hideAllNotifications) openExportFinishedDialog({ filePath: outPath, children: `${i18n.t('Screenshot captured to:')} ${outPath}` });
+        if (!hideAllNotifications) openExportFinishedDialog({ filePath: outPath, children: <div style={{ wordWrap: 'break-word' }}>{i18n.t('Screenshot captured to:')} {outPath}</div> });
       }, i18n.t('Failed to capture frame'));
     } finally {
       setWorking(undefined);
@@ -1277,7 +1277,7 @@ function App() {
       }
       if (!hideAllNotifications && lastOutPath != null) {
         showOsNotification(i18n.t('Frames have been extracted'));
-        openExportFinishedDialog({ filePath: lastOutPath, children: i18n.t('Frames extracted to: {{path}}', { path: outputDir }) });
+        openExportFinishedDialog({ filePath: lastOutPath, children: <div style={{ wordWrap: 'break-word' }}>{i18n.t('Frames extracted to: {{path}}', { path: outputDir })}</div> });
       }
     } catch (err) {
       showOsNotification(i18n.t('Failed to extract frames'));
@@ -1605,7 +1605,7 @@ function App() {
   const extractAllStreams = useCallback(async () => {
     if (!filePath) return;
 
-    if (!(await confirmDialog({ description: t('Please confirm that you want to extract all tracks as separate files'), confirmButtonText: t('Extract all tracks') }))) return;
+    if (!(await confirmDialog({ focusConfirm: true, description: t('Please confirm that you want to extract all tracks as separate files'), confirmButtonText: t('Extract all tracks') }))) return;
 
     if (workingRef.current) return;
     try {
@@ -2360,9 +2360,10 @@ function App() {
     setWorking,
     handleError,
     showGenericDialog,
+    confirmDialog,
     keyboardLayoutMap,
     updateKeyboardLayout,
-  }), [handleError, keyboardLayoutMap, setWorking, showGenericDialog, updateKeyboardLayout, working]);
+  }), [confirmDialog, handleError, keyboardLayoutMap, setWorking, showGenericDialog, updateKeyboardLayout, working]);
 
 
   const showLeftBar = batchFiles.length > 0;
@@ -2698,6 +2699,8 @@ function App() {
                       askForCleanupChoices={askForCleanupChoices}
                       toggleStoreProjectInWorkingDir={toggleStoreProjectInWorkingDir}
                       clearOutDir={clearOutDir}
+                      showAdvancedSettings={showAdvancedSettings}
+                      setShowAdvancedSettings={setShowAdvancedSettings}
                     />
                     <Dialog.CloseButton />
                   </Dialog.Content>
