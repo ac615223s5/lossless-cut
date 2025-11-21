@@ -555,7 +555,7 @@ function App() {
     return keyframeByNumber[frameNum];
   }, [commandedTime, getFrameCount, keyframeByNumber]);
 
-  const onGenerateOverviewWaveformClick = useCallback(async () => {
+  const generateOverviewWaveform = useCallback(async () => {
     if (working) return;
     try {
       setWorking({ text: t('Generating full overview waveform, this may take a few minutes.') });
@@ -1934,7 +1934,7 @@ function App() {
       seekAccelerationRef.current *= keyboardSeekAccFactor;
     }
 
-    const ret: Record<MainKeyboardAction, (() => boolean) | (() => void)> = {
+    const ret: Record<MainKeyboardAction, () => void> = {
       // NOTE: Do not change these keys because users have bound keys by these names in their config files
       // For actions, see also KeyboardShortcuts.jsx
       togglePlayNoResetSpeed: () => togglePlay(),
@@ -2070,10 +2070,11 @@ function App() {
       selectAllMarkers,
       // also called from menu (note: no longer a toggle. Esc must be used to close it because it's a dialog now):
       toggleKeyboardShortcuts,
+      generateOverviewWaveform,
     };
 
     return ret;
-  }, [togglePlaySelectedSegments, toggleLoopSelectedSegments, pause, timelineToggleComfortZoom, captureSnapshot, captureSnapshotAsCoverArt, captureSnapshotToClipboard, setCutStart, setCutEnd, cleanupFilesDialog, splitCurrentSegment, focusSegmentAtCursor, selectSegmentsAtCursor, increaseRotation, jumpCutStart, jumpCutEnd, jumpTimelineStart, jumpTimelineEnd, batchOpenSelectedFile, closeBatch, addSegment, duplicateCurrentSegment, toggleLastCommands, extractCurrentSegmentFramesAsImages, extractSelectedSegmentsFramesAsImages, reorderSegsByStartTime, invertAllSegments, fillSegmentsGaps, combineOverlappingSegments, combineSelectedSegments, createFixedDurationSegments, createNumSegments, createFixedByteSizedSegments, createRandomSegments, alignSegmentTimesToKeyframes, shuffleSegments, clearSegments, toggleSegmentsList, toggleStreamsSelector, extractAllStreams, convertFormatBatch, concatBatch, toggleCaptureFormat, toggleStripAudio, toggleStripVideo, toggleStripSubtitle, toggleStripThumbnail, toggleStripAll, toggleDarkMode, askStartTimeOffset, deselectAllSegments, selectAllSegments, selectOnlyCurrentSegment, editCurrentSegmentTags, toggleCurrentSegmentSelected, invertSelectedSegments, removeSelectedSegments, tryFixInvalidDuration, shiftAllSegmentTimes, toggleMuted, copySegmentsToClipboard, handleShowStreamsSelectorClick, openFilesDialog, openDirDialog, toggleSettings, detectBlackScenes, detectSilentScenes, detectSceneChanges, readAllKeyframes, createSegmentsFromKeyframes, toggleWaveformMode, toggleShowThumbnails, toggleShowKeyframes, showIncludeExternalStreamsDialog, toggleFullscreenVideo, selectAllMarkers, toggleKeyboardShortcuts, checkFileOpened, cutSegments, seekRel, keyboardSeekAccFactor, togglePlay, play, userChangePlaybackRate, goToTimecode, keyboardNormalSeekSpeed, keyboardSeekSpeed2, keyboardSeekSpeed3, seekRelPercent, seekClosestKeyframe, shortStep, jumpSeg, zoomRel, batchFileJump, removeSegment, currentSegIndexSafe, cutSegmentsHistory, labelSegment, onExportPress, userHtml5ifyCurrentFile, toggleKeyframeCut, applyEnabledStreamsFilter, setPlaybackVolume, commandedTimeRef, closeFileWithConfirm, openSendReportDialogWithState]);
+  }, [togglePlaySelectedSegments, toggleLoopSelectedSegments, pause, timelineToggleComfortZoom, captureSnapshot, captureSnapshotAsCoverArt, captureSnapshotToClipboard, setCutStart, setCutEnd, cleanupFilesDialog, splitCurrentSegment, focusSegmentAtCursor, selectSegmentsAtCursor, increaseRotation, jumpCutStart, jumpCutEnd, jumpTimelineStart, jumpTimelineEnd, batchOpenSelectedFile, closeBatch, addSegment, duplicateCurrentSegment, toggleLastCommands, extractCurrentSegmentFramesAsImages, extractSelectedSegmentsFramesAsImages, reorderSegsByStartTime, invertAllSegments, fillSegmentsGaps, combineOverlappingSegments, combineSelectedSegments, createFixedDurationSegments, createNumSegments, createFixedByteSizedSegments, createRandomSegments, alignSegmentTimesToKeyframes, shuffleSegments, clearSegments, toggleSegmentsList, toggleStreamsSelector, extractAllStreams, convertFormatBatch, concatBatch, toggleCaptureFormat, toggleStripAudio, toggleStripVideo, toggleStripSubtitle, toggleStripThumbnail, toggleStripAll, toggleDarkMode, askStartTimeOffset, deselectAllSegments, selectAllSegments, selectOnlyCurrentSegment, editCurrentSegmentTags, toggleCurrentSegmentSelected, invertSelectedSegments, removeSelectedSegments, tryFixInvalidDuration, shiftAllSegmentTimes, toggleMuted, copySegmentsToClipboard, handleShowStreamsSelectorClick, openFilesDialog, openDirDialog, toggleSettings, detectBlackScenes, detectSilentScenes, detectSceneChanges, readAllKeyframes, createSegmentsFromKeyframes, toggleWaveformMode, toggleShowThumbnails, toggleShowKeyframes, showIncludeExternalStreamsDialog, toggleFullscreenVideo, selectAllMarkers, toggleKeyboardShortcuts, generateOverviewWaveform, checkFileOpened, cutSegments, seekRel, keyboardSeekAccFactor, togglePlay, play, userChangePlaybackRate, goToTimecode, keyboardNormalSeekSpeed, keyboardSeekSpeed2, keyboardSeekSpeed3, seekRelPercent, seekClosestKeyframe, shortStep, jumpSeg, zoomRel, batchFileJump, removeSegment, currentSegIndexSafe, cutSegmentsHistory, labelSegment, onExportPress, userHtml5ifyCurrentFile, toggleKeyframeCut, applyEnabledStreamsFilter, setPlaybackVolume, commandedTimeRef, closeFileWithConfirm, openSendReportDialogWithState]);
 
   const getKeyboardAction = useCallback((action: MainKeyboardAction) => mainActions[action], [mainActions]);
 
@@ -2576,7 +2577,7 @@ function App() {
                   zoomWindowStartTime={zoomWindowStartTime}
                   zoomWindowEndTime={zoomWindowEndTime}
                   onZoomWindowStartTimeChange={setZoomWindowStartTime}
-                  onGenerateOverviewWaveformClick={onGenerateOverviewWaveformClick}
+                  onGenerateOverviewWaveformClick={generateOverviewWaveform}
                   playing={playing}
                   isFileOpened={isFileOpened}
                   onWheel={onTimelineWheel}
@@ -2711,7 +2712,7 @@ function App() {
 
               <ConcatDialog isShown={batchFiles.length > 0 && concatDialogOpen} onHide={() => setConcatDialogOpen(false)} paths={batchFilePaths} mergedFileTemplate={mergedFileTemplateOrDefault} generateMergedFileNames={generateMergedFileNames} onConcat={userConcatFiles} setAlwaysConcatMultipleFiles={setAlwaysConcatMultipleFiles} alwaysConcatMultipleFiles={alwaysConcatMultipleFiles} fileFormat={fileFormat} setFileFormat={setFileFormat} detectedFileFormat={detectedFileFormat} setDetectedFileFormat={setDetectedFileFormat} onOutputFormatUserChange={onOutputFormatUserChange} />
 
-              <KeyboardShortcuts isShown={keyboardShortcutsVisible} onHide={() => setKeyboardShortcutsVisible(false)} keyBindings={keyBindings} setKeyBindings={setKeyBindings} currentCutSeg={currentCutSeg} resetKeyBindings={resetKeyBindings} />
+              <KeyboardShortcuts isShown={keyboardShortcutsVisible} onHide={() => setKeyboardShortcutsVisible(false)} keyBindings={keyBindings} setKeyBindings={setKeyBindings} currentCutSeg={currentCutSeg} resetKeyBindings={resetKeyBindings} getKeyboardAction={getKeyboardAction} />
 
               {/* This should probably be last, so that it's always on top */}
               <AnimatePresence>
