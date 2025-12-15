@@ -233,7 +233,7 @@ function parseCliArgs(rawArgv = process.argv) {
   const argsWithoutAppName = rawArgv.length > ignoreFirstArgs ? rawArgv.slice(ignoreFirstArgs) : [];
 
   return yargsParser(argsWithoutAppName, {
-    boolean: ['allow-multiple-instances', 'disable-networking'],
+    boolean: ['disable-networking'],
     string: ['settings-json', 'config-dir', 'lossy-mode'],
   });
 }
@@ -251,7 +251,7 @@ if (argv['localesPath'] != null) i18nCommon.setCustomLocalesPath(argv['localesPa
 
 
 function safeRequestSingleInstanceLock(additionalData: Record<string, unknown>) {
-  if (process.mas) return true; // todo remove when fixed https://github.com/electron/electron/issues/35540
+  if (process.mas) return true; // todo remove when dropping support for MacOS 13 https://github.com/electron/electron/issues/35540#issuecomment-2173130321
 
   // using additionalData because the built in "argv" passing is a bit broken:
   // https://github.com/electron/electron/issues/20322
