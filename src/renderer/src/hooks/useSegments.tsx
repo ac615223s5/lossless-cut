@@ -518,30 +518,30 @@ function useSegments({ filePath, workingRef, setWorking, setProgress, videoStrea
               time,
               mode: mode === 'opposing' ? (key === 'start' ? 'before' : 'after') : mode,
             });
+            if (mode === 'experimental' && keyframe == null) {
+              keyframe = fileDuration;
+            }
             if (keyframe == null) {
-              if (mode === 'keyframeCutFix') {
-                keyframe = fileDuration;
-              } else {
-                throw new UserFacingError(i18n.t('Cannot find any keyframe within 60 seconds of frame {{time}}', { time }));
-              }
+              throw new UserFacingError(i18n.t('Cannot find any keyframe within 60 seconds of frame {{time}}', { time }));
             }
             newSegment[key] = keyframe;
           }
         };
 
         if (startOrEnd.includes('start')) {
-          if (mode === 'keyframeCutFix') {
+          if (mode === 'experimental') {
             newSegment.start += frameDuration * 0.3;
           }
           await align('start');
-          if (mode === 'keyframeCutFix') {
+          if (mode === 'experimental') {
             newSegment.start -= frameDuration * 0.7;
           }
         }
+
         if (newSegment.end !== undefined) {
           if (startOrEnd.includes('end')) {
             await align('end');
-            if (mode === 'keyframeCutFix' && newSegment.end !== fileDuration) {
+            if (mode === 'experimental' && newSegment.end !== fileDuration) {
               newSegment.end -= frameDuration * 0.3;
             }
           }

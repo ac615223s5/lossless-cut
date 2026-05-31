@@ -305,7 +305,7 @@ export async function askForAlignSegments() {
       before: i18n.t('Previous keyframe'),
       after: i18n.t('Next keyframe'),
       opposing: i18n.t('Segment start to previous keyframe and end to next keyframe'),
-      keyframeCutFix: i18n.t('True keyframe cut'),
+      experimental: i18n.t('Experimental keyframe cut'),
     } satisfies Record<FindKeyframeMode | 'opposing', unknown>,
     inputValue: 'before',
     text: i18n.t('Do you want to align segment times to the nearest, previous or next keyframe?'),
