@@ -1,21 +1,34 @@
-import { memo } from 'react';
+import type { CSSProperties, MouseEventHandler } from 'react';
+import { forwardRef } from 'react';
 import { FiScissors } from 'react-icons/fi';
 import { FaFileExport } from 'react-icons/fa';
 import { useTranslation } from 'react-i18next';
 
 import { primaryColor } from '../colors';
 import useUserSettings from '../hooks/useUserSettings';
-import { SegmentToExport } from '../types';
+import type { SegmentToExport } from '../types';
+import styles from './ExportButton.module.css';
 
 
-function ExportButton({ segmentsToExport, areWeCutting, onClick, size = 1 }: {
-  segmentsToExport: SegmentToExport[], areWeCutting: boolean, onClick: () => void, size?: number | undefined,
-}) {
+interface Props {
+  segmentsToExport: SegmentToExport[],
+  areWeCutting: boolean,
+  onClick: MouseEventHandler<HTMLButtonElement>,
+  style?: CSSProperties,
+}
+
+// eslint-disable-next-line react/display-name
+const ExportButton = forwardRef<HTMLButtonElement, Props>(({
+  segmentsToExport,
+  areWeCutting,
+  onClick,
+  style,
+}, ref) => {
   const CutIcon = areWeCutting ? FiScissors : FaFileExport;
 
   const { t } = useTranslation();
 
-  const { autoMerge } = useUserSettings();
+  const { autoMerge, simpleMode } = useUserSettings();
 
   let title = t('Export');
   if (segmentsToExport.length === 1) {
@@ -27,19 +40,20 @@ function ExportButton({ segmentsToExport, areWeCutting, onClick, size = 1 }: {
   const text = autoMerge && segmentsToExport && segmentsToExport.length > 1 ? t('Export+merge') : t('Export');
 
   return (
-    <div
-      style={{ cursor: 'pointer', background: primaryColor, color: 'white', borderRadius: size * 5, paddingTop: size * 1, paddingBottom: size * 2.5, paddingLeft: size * 7, paddingRight: size * 7, fontSize: size * 13, whiteSpace: 'nowrap', opacity: segmentsToExport.length === 0 ? 0.5 : undefined }}
+    <button
+      ref={ref}
+      type="button"
+      className={[...(simpleMode ? ['export-animation'] : []), styles['exportButton']].join(' ')}
+      style={{ backgroundColor: primaryColor, ...style }}
       onClick={onClick}
       title={title}
-      role="button"
     >
       <CutIcon
-        style={{ verticalAlign: 'middle', marginRight: size * 4 }}
-        size={size * 15}
+        style={{ verticalAlign: 'middle', marginRight: '.2em' }}
       />
       {text}
-    </div>
+    </button>
   );
-}
+});
 
-export default memo(ExportButton);
+export default ExportButton;

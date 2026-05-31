@@ -1,10 +1,11 @@
-import { CSSProperties, memo, useMemo } from 'react';
+import type { CSSProperties } from 'react';
+import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { withBlur } from '../util';
 import useUserSettings from '../hooks/useUserSettings';
 import Select from './Select';
-import { ExportMode } from '../types';
+import type { ExportMode } from '../types';
 
 
 function ExportModeButton({ selectedSegments, style }: { selectedSegments: unknown[], style?: CSSProperties }) {
@@ -52,9 +53,9 @@ function ExportModeButton({ selectedSegments, style }: { selectedSegments: unkno
   return (
     // eslint-disable-next-line react/jsx-props-no-spreading
     <Select
-      style={{ height: 20, ...style }}
+      style={style}
       value={effectiveExportMode}
-      onChange={withBlur((e) => onChange(e.target.value))}
+      onChange={withBlur((e) => onChange(e.target.value as ExportMode))}
     >
       <option key="disabled" value="" disabled>{t('Export mode')}</option>
 
@@ -64,7 +65,6 @@ function ExportModeButton({ selectedSegments, style }: { selectedSegments: unkno
           merge: t('Merge cuts'),
           'merge+separate': t('Merge & Separate'),
           separate: t('Separate files'),
-          description: t('Export to separate files'),
         };
 
         const title = titles[mode];

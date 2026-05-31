@@ -1,29 +1,32 @@
 import i18n from 'i18next';
 import pMap from 'p-map';
-import ky from 'ky';
 import prettyBytes from 'pretty-bytes';
 import sortBy from 'lodash/sortBy';
-import pRetry, { Options } from 'p-retry';
-import { ExecaError } from 'execa';
-import type * as FsPromises from 'node:fs/promises';
-import type * as FsExtra from 'fs-extra';
-import type { PlatformPath } from 'node:path';
+import type { Options } from 'p-retry';
+import pRetry from 'p-retry';
+import type { ExecaError } from 'execa';
+import confetti from 'canvas-confetti';
+import invariant from 'tiny-invariant';
 
-import isDev from './isDev';
-import Swal, { toast } from './swal';
 import { ffmpegExtractWindow } from './util/constants';
+import { appName } from '../../main/common';
+import type { EnableImportChapters, Html5ifyMode } from '../../common/types';
+import { UserFacingError } from '../errors';
+import type { FFprobeFormat } from '../../common/ffprobe';
 
-const { dirname, parse: parsePath, join, extname, isAbsolute, resolve, basename }: PlatformPath = window.require('path');
-const fsExtra: typeof FsExtra = window.require('fs-extra');
-const { stat, lstat, readdir, utimes, unlink }: typeof FsPromises = window.require('fs/promises');
+const { dirname, parse: parsePath, join, extname, isAbsolute, resolve, basename } = window.require('path');
+const { stat, lstat, readdir, utimes, unlink, open, access, constants: { R_OK, W_OK } } = window.require('fs/promises');
 const { ipcRenderer } = window.require('electron');
 const remote = window.require('@electron/remote');
 const { isWindows, isMac } = remote.require('./index.js');
 
-export { isWindows, isMac };
+const appVersion = remote.app.getVersion();
+const appPath = remote.app.getAppPath();
+
+export { isWindows, isMac, appVersion, appPath };
 
 
-const trashFile = async (path: string) => ipcRenderer.invoke('tryTrashItem', path);
+export const trashFile = async (path: string) => ipcRenderer.invoke('tryTrashItem', path);
 
 export const showItemInFolder = async (path: string) => ipcRenderer.invoke('showItemInFolder', path);
 
@@ -32,7 +35,10 @@ export function getFileDir(filePath?: string) {
   return filePath ? dirname(filePath) : undefined;
 }
 
-export function getOutDir<T1 extends string | undefined, T2 extends string | undefined>(customOutDir?: T1, filePath?: T2): T1 extends string ? string : T2 extends string ? string : undefined;
+export function getOutDir(customOutDir: string | undefined, filePath: string): string;
+export function getOutDir(customOutDir: string, filePath: undefined): string;
+export function getOutDir(customOutDir: undefined, filePath: undefined): undefined;
+export function getOutDir(customOutDir: string | undefined, filePath: string | undefined): string | undefined;
 export function getOutDir(customOutDir?: string | undefined, filePath?: string | undefined) {
   if (customOutDir != null) return customOutDir;
   if (filePath != null) return getFileDir(filePath);
@@ -51,6 +57,8 @@ export function getOutPath({ customOutDir, filePath, fileName }: { customOutDir?
   return join(getOutDir(customOutDir, filePath), fileName);
 }
 
+export const getDownloadMediaOutPath = (customOutDir: string, fileName: string) => join(customOutDir, fileName);
+
 export const getSuffixedFileName = (filePath: string | undefined, nameSuffix: string) => `${getFileBaseName(filePath)}-${nameSuffix}`;
 
 export function getSuffixedOutPath<T extends string | undefined>(a: { customOutDir?: string | undefined, filePath?: T | undefined, nameSuffix: string }): T extends string ? string : undefined;
@@ -61,9 +69,9 @@ export function getSuffixedOutPath({ customOutDir, filePath, nameSuffix }: { cus
 
 export async function havePermissionToReadFile(filePath: string) {
   try {
-    const fd = await fsExtra.open(filePath, 'r');
+    const fd = await open(filePath, 'r');
     try {
-      await fsExtra.close(fd);
+      await fd.close();
     } catch (err) {
       console.error('Failed to close fd', err);
     }
@@ -74,9 +82,20 @@ export async function havePermissionToReadFile(filePath: string) {
   return true;
 }
 
+export const makeSourceFileAccessError = () => new UserFacingError(i18n.t('Source file no longer exists or is not accessible. Please check that it is still in its original location and that you have permission to access it.'));
+
+export async function assertFileExists(filePath: string) {
+  try {
+    await access(filePath, R_OK);
+  } catch (err) {
+    console.error(err);
+    throw makeSourceFileAccessError();
+  }
+}
+
 export async function checkDirWriteAccess(dirPath: string) {
   try {
-    await fsExtra.access(dirPath, fsExtra.constants.W_OK);
+    await access(dirPath, W_OK);
   } catch (err) {
     if (err instanceof Error && 'code' in err) {
       if (err.code === 'EPERM') return false; // Thrown on Mac (MAS build) when user has not yet allowed access
@@ -87,32 +106,23 @@ export async function checkDirWriteAccess(dirPath: string) {
   return true;
 }
 
-export async function pathExists(pathIn: string) {
-  return fsExtra.pathExists(pathIn);
-}
-
 export async function getPathReadAccessError(pathIn: string) {
   try {
-    await fsExtra.access(pathIn, fsExtra.constants.R_OK);
+    await access(pathIn, R_OK);
     return undefined;
   } catch (err) {
     return err instanceof Error && 'code' in err && typeof err.code === 'string' ? err.code : undefined;
   }
 }
 
-export async function dirExists(dirPath: string) {
-  return (await pathExists(dirPath)) && (await lstat(dirPath)).isDirectory();
-}
-
-// const testFailFsOperation = isDev;
-const testFailFsOperation = false;
+// export const testFailFsOperation = isDev;
+export const testFailFsOperation = false;
 
 // Retry because sometimes write operations fail on windows due to the file being locked for various reasons (often anti-virus) #272 #1797 #1704
-export async function fsOperationWithRetry(operation: () => Promise<unknown>, { signal, retries = 10, minTimeout = 100, maxTimeout = 2000, ...opts }: Options & { retries?: number | undefined, minTimeout?: number | undefined, maxTimeout?: number | undefined } = {}) {
-  return pRetry(async () => {
+export async function fsOperationWithRetry<T>(operation: () => Promise<T>, { signal, retries = 10, minTimeout = 100, maxTimeout = 2000, ...opts }: Options & { retries?: number | undefined, minTimeout?: number | undefined, maxTimeout?: number | undefined } = {}): Promise<T> {
+  return pRetry<T>(async () => {
     if (testFailFsOperation && Math.random() > 0.3) throw Object.assign(new Error('test delete failure'), { code: 'EPERM' });
-    await operation();
-    // @ts-expect-error todo
+    return operation();
   }, {
     retries,
     signal,
@@ -121,20 +131,28 @@ export async function fsOperationWithRetry(operation: () => Promise<unknown>, { 
     // mimic fs.rm `maxRetries` https://nodejs.org/api/fs.html#fspromisesrmpath-options
     shouldRetry: (err) => err instanceof Error && 'code' in err && typeof err.code === 'string' && ['EBUSY', 'EMFILE', 'ENFILE', 'EPERM'].includes(err.code),
     ...opts,
-  });
+  } as Options);
 }
 
 // example error: index-18074aaf.js:166 Failed to delete C:\Users\USERNAME\Desktop\RC\New folder\2023-12-27 21-45-22 (GMT p5)-merged-1703933052361-00.01.04.915-00.01.07.424-seg1.mp4 Error: EPERM: operation not permitted, unlink 'C:\Users\USERNAME\Desktop\RC\New folder\2023-12-27 21-45-22 (GMT p5)-merged-1703933052361-00.01.04.915-00.01.07.424-seg1.mp4'
-export const unlinkWithRetry = async (path: string, options?: Options) => fsOperationWithRetry(async () => unlink(path), { ...options, onFailedAttempt: (error) => console.warn('Retrying delete', path, error.attemptNumber) });
+export const unlinkWithRetry = async (path: string, options?: Options) => fsOperationWithRetry(async () => unlink(path), { ...options, onFailedAttempt: ({ attemptNumber, error }) => console.warn('Retrying delete', path, attemptNumber, error.message) });
 // example error: index-18074aaf.js:160 Error: EPERM: operation not permitted, utime 'C:\Users\USERNAME\Desktop\RC\New folder\2023-12-27 21-45-22 (GMT p5)-merged-1703933052361-cut-merged-1703933070237.mp4'
-export const utimesWithRetry = async (path: string, atime: number, mtime: number, options?: Options) => fsOperationWithRetry(async () => utimes(path, atime, mtime), { ...options, onFailedAttempt: (error) => console.warn('Retrying utimes', path, error.attemptNumber) });
+export const utimesWithRetry = async (path: string, atime: number, mtime: number, options?: Options) => fsOperationWithRetry(async () => utimes(path, atime, mtime), { ...options, onFailedAttempt: ({ attemptNumber, error }) => console.warn('Retrying utimes', path, attemptNumber, error.message) });
 
 export const getFrameDuration = (fps?: number) => 1 / (fps ?? 30);
 
-export async function transferTimestamps({ inPath, outPath, cutFrom = 0, cutTo = 0, duration = 0, treatInputFileModifiedTimeAsStart = true, treatOutputFileModifiedTimeAsStart }: {
-  inPath: string, outPath: string, cutFrom?: number | undefined, cutTo?: number | undefined, duration?: number | undefined, treatInputFileModifiedTimeAsStart?: boolean | null | undefined, treatOutputFileModifiedTimeAsStart: boolean | null | undefined
+export async function transferTimestamps({ inPath, outPath, cutFrom = 0, cutTo: cutToIn, duration = 0, treatInputFileModifiedTimeAsStart, treatOutputFileModifiedTimeAsStart }: {
+  inPath: string,
+  outPath: string,
+  cutFrom?: number | undefined,
+  cutTo?: number | undefined,
+  duration: number | undefined,
+  treatInputFileModifiedTimeAsStart: boolean,
+  treatOutputFileModifiedTimeAsStart: boolean | null | undefined,
 }) {
-  if (treatOutputFileModifiedTimeAsStart == null) return; // null means disabled;
+  if (treatOutputFileModifiedTimeAsStart == null) return; // null means time transfer is disabled (use current time);
+
+  const cutTo = cutToIn ?? duration;
 
   // see https://github.com/mifi/lossless-cut/issues/1017#issuecomment-1049097115
   function calculateTime(fileTime: number) {
@@ -159,36 +177,20 @@ export async function transferTimestamps({ inPath, outPath, cutFrom = 0, cutTo =
   }
 }
 
-export function handleError(arg1: unknown, arg2?: unknown) {
-  console.error('handleError', arg1, arg2);
-
-  let msg;
-  let errorMsg;
-  if (typeof arg1 === 'string') msg = arg1;
-  else if (typeof arg2 === 'string') msg = arg2;
-
-  if (arg1 instanceof Error) errorMsg = arg1.message;
-  if (arg2 instanceof Error) errorMsg = arg2.message;
-
-  toast.fire({
-    icon: 'error',
-    title: msg || i18n.t('An error has occurred.'),
-    text: errorMsg ? errorMsg.slice(0, 300) : undefined,
-  });
-}
-
 export function filenamify(name: string) {
-  return name.replaceAll(/[^\w.-]/g, '_');
+  // \p{L}\p{N} are unicode letters and numbers
+  return name.replaceAll(/[^\p{L}\p{N} .-_]/gu, '_');
 }
 
-export function withBlur(cb) {
-  return (e) => {
+// eslint-disable-next-line space-before-function-paren
+export function withBlur<T extends { target?: { blur?: () => unknown } | object }>(cb: (a: T) => void) {
+  return (e: T) => {
     cb(e);
-    e.target?.blur();
+    if (e.target && 'blur' in e.target) e.target?.blur?.();
   };
 }
 
-export function dragPreventer(ev) {
+export function dragPreventer(ev: DragEvent) {
   ev.preventDefault();
 }
 
@@ -211,20 +213,20 @@ export function getOutFileExtension({ isCustomFormatSelected, outFormat, filePat
   isCustomFormatSelected?: boolean, outFormat: string, filePath: string,
 }) {
   if (!isCustomFormatSelected) {
-    const ext = extname(filePath);
+    const inputExt = extname(filePath);
     // QuickTime is quirky about the file extension of mov files (has to be .mov)
     // https://github.com/mifi/lossless-cut/issues/1075#issuecomment-1072084286
-    const hasMovIncorrectExtension = outFormat === 'mov' && ext.toLowerCase() !== '.mov';
+    const hasMovIncorrectExtension = outFormat === 'mov' && inputExt.toLowerCase() !== '.mov';
 
-    // OK, just keep the current extension. Because most players will not care about the extension
-    if (!hasMovIncorrectExtension) return extname(filePath);
+    // OK, just keep the current extension. Because most other players will not care about the extension
+    if (!hasMovIncorrectExtension) return inputExt;
   }
 
   // user is changing format, must update extension too
   return `.${getExtensionForFormat(outFormat)}`;
 }
 
-export const hasDuplicates = (arr) => new Set(arr).size !== arr.length;
+export const hasDuplicates = (arr: unknown[]) => new Set(arr).size !== arr.length;
 
 // Need to resolve relative paths from the command line https://github.com/mifi/lossless-cut/issues/639
 export const resolvePathIfNeeded = (inPath: string) => (isAbsolute(inPath) ? inPath : resolve(inPath));
@@ -232,13 +234,13 @@ export const resolvePathIfNeeded = (inPath: string) => (isAbsolute(inPath) ? inP
 export const html5ifiedPrefix = 'html5ified-';
 export const html5dummySuffix = 'dummy';
 
-export async function findExistingHtml5FriendlyFile(fp, cod) {
+export async function findExistingHtml5FriendlyFile(fp: string, cod: string | undefined) {
   // The order is the priority we will search:
   const suffixes = ['slowest', 'slow-audio', 'slow', 'fast-audio-remux', 'fast-audio', 'fast', html5dummySuffix];
   const prefix = getSuffixedFileName(fp, html5ifiedPrefix);
 
   const outDir = getOutDir(cod, fp);
-  if (outDir == null) throw new Error();
+  invariant(outDir != null);
   const dirEntries = await readdir(outDir);
 
   const html5ifiedDirEntries = dirEntries.filter((entry) => entry.startsWith(prefix));
@@ -265,94 +267,49 @@ export async function findExistingHtml5FriendlyFile(fp, cod) {
   };
 }
 
-export function getHtml5ifiedPath(cod: string | undefined, fp, type) {
+export function getHtml5ifiedPath(cod: string | undefined, fp: string, type: Exclude<Html5ifyMode, 'fastest'>) {
   // See also inside ffmpegHtml5ify
   const ext = (isMac && ['slowest', 'slow', 'slow-audio'].includes(type)) ? 'mp4' : 'mkv';
   return getSuffixedOutPath({ customOutDir: cod, filePath: fp, nameSuffix: `${html5ifiedPrefix}${type}.${ext}` });
 }
 
-export async function deleteFiles({ paths, deleteIfTrashFails, signal }: { paths: string[], deleteIfTrashFails?: boolean, signal: AbortSignal }) {
-  const failedToTrashFiles: string[] = [];
-
-  // eslint-disable-next-line no-restricted-syntax
-  for (const path of paths) {
-    try {
-      if (testFailFsOperation) throw new Error('test trash failure');
-      // eslint-disable-next-line no-await-in-loop
-      await trashFile(path);
-      signal.throwIfAborted();
-    } catch (err) {
-      console.error(err);
-      failedToTrashFiles.push(path);
-    }
-  }
-
-  if (failedToTrashFiles.length === 0) return; // All good!
-
-  if (!deleteIfTrashFails) {
-    const { value } = await Swal.fire({
-      icon: 'warning',
-      text: i18n.t('Unable to move file to trash. Do you want to permanently delete it?'),
-      confirmButtonText: i18n.t('Permanently delete'),
-      showCancelButton: true,
-    });
-    if (!value) return;
-  }
-
-  await pMap(failedToTrashFiles, async (path) => unlinkWithRetry(path, { signal }), { concurrency: 5 });
-}
-
-export const deleteDispositionValue = 'llc_disposition_remove';
-
 export const mirrorTransform = 'matrix(-1, 0, 0, 1, 0, 0)';
 
-export function isExecaError(err: unknown): err is Pick<ExecaError, 'stdout' | 'stderr'> {
-  return err instanceof Error && 'stdout' in err && 'stderr' in err;
+// todo this is not a correct assumption
+export type InvariantExecaError = ExecaError<{ encoding: 'utf8' }> | ExecaError<{ encoding: 'buffer' }>;
+
+// We can't use `instanceof ExecaError` because the error has been sent over the main-renderer bridge (@electron/remote)
+// so instead we just check if it has some of execa's specific error properties
+export function isExecaError(err: unknown): err is InvariantExecaError {
+  // https://github.com/sindresorhus/execa/blob/main/docs/api.md#resultfailed
+  return err instanceof Error && ('failed' in err && 'shortMessage' in err && 'isForcefullyTerminated' in err);
 }
 
-// I *think* Windows will throw error with code ENOENT if ffprobe/ffmpeg fails (execa), but other OS'es will return this error code if a file is not found, so it would be wrong to attribute it to exec failure.
-// see https://github.com/mifi/lossless-cut/issues/451
-export const isExecaFailure = (err): err is ExecaError => err.exitCode === 1 || (isWindows && err.code === 'ENOENT');
-
-// A bit hacky but it works, unless someone has a file called "No space left on device" ( ͡° ͜ʖ ͡°)
-export const isOutOfSpaceError = (err): err is ExecaError => (
-  err && isExecaFailure(err)
-  && typeof err.stderr === 'string' && err.stderr.includes('No space left on device')
+export const isAbortedError = (err: unknown) => (
+  // execa killed (aborted by user). isTerminated because runningFfmpegs process.kill
+  (isExecaError(err) && (err.isCanceled || err.isTerminated))
+  || (err instanceof Error && err.name === 'AbortError')
 );
 
-export async function checkAppPath() {
-  try {
-    const forceCheck = false;
-    // const forceCheck = isDev;
-    // this code is purposefully obfuscated to try to detect the most basic cloned app submissions to the MS Store
-    if (!isWindowsStoreBuild && !forceCheck) return;
-    // eslint-disable-next-line no-useless-concat, one-var, one-var-declaration-per-line
-    const mf = 'mi' + 'fi.no', llc = 'Los' + 'slessC' + 'ut';
-    const appPath = isDev ? 'C:\\Program Files\\WindowsApps\\37672NoveltyStudio.MediaConverter_9.0.6.0_x64__vjhnv588cyf84' : remote.app.getAppPath();
-    const pathMatch = appPath.replaceAll('\\', '/').match(/Windows ?Apps\/([^/]+)/); // find the first component after WindowsApps
-    // example pathMatch: 37672NoveltyStudio.MediaConverter_9.0.6.0_x64__vjhnv588cyf84
-    if (!pathMatch) {
-      console.warn('Unknown path match', appPath);
-      return;
-    }
-    const pathSeg = pathMatch[1];
-    if (pathSeg == null) return;
-    if (pathSeg.startsWith(`57275${mf}.${llc}_`)) return;
-    // this will report the path and may return a msg
-    const url = `https://losslesscut-analytics.mifi.no/${pathSeg.length}/${encodeURIComponent(btoa(pathSeg))}`;
-    // console.log('Reporting app', pathSeg, url);
-    const response = await ky(url).json<{ invalid?: boolean, title: string, text: string }>();
-    if (response.invalid) toast.fire({ timer: 60000, icon: 'error', title: response.title, text: response.text });
-  } catch (err) {
-    if (isDev) console.warn(err instanceof Error && err.message);
-  }
-}
+export const getStdioString = (stdio: string | Uint8Array) => (stdio instanceof Uint8Array ? Buffer.from(stdio).toString('utf8') : stdio);
+
+// A bit hacky but it works, unless someone has a file called "No space left on device" ( ͡° ͜ʖ ͡°)
+export const isOutOfSpaceError = (err: InvariantExecaError) => (
+  err.exitCode !== 0
+  && !!getStdioString(err.stderr)?.includes('No space left on device')
+);
+
+export const isMuxNotSupported = (err: InvariantExecaError) => (
+  err.exitCode !== 0
+  && err.stderr != null
+  && /Could not write header .*incorrect codec parameters .*Invalid argument/.test(getStdioString(err.stderr) ?? '')
+);
 
 // https://stackoverflow.com/a/2450976/6519037
-export function shuffleArray(arrayIn) {
+export function shuffleArray<T>(arrayIn: T[]) {
   const array = [...arrayIn];
   let currentIndex = array.length;
-  let randomIndex;
+  let randomIndex: number;
 
   // While there remain elements to shuffle...
   while (currentIndex !== 0) {
@@ -362,23 +319,26 @@ export function shuffleArray(arrayIn) {
 
     // And swap it with the current element.
     [array[currentIndex], array[randomIndex]] = [
-      array[randomIndex], array[currentIndex]];
+      array[randomIndex]!, array[currentIndex]!,
+    ] as const;
   }
 
   return array;
 }
 
 // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_Expressions#escaping
-export function escapeRegExp(string) {
+export function escapeRegExp(str: string) {
   // eslint-disable-next-line unicorn/better-regex
-  return string.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
+  return str.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`); // $& means the whole matched string
 }
 
-export const readFileSize = async (path) => (await stat(path)).size;
+export const readFileStats = async (path: string) => stat(path);
 
-export const readFileSizes = (paths) => pMap(paths, async (path) => readFileSize(path), { concurrency: 5 });
+export const readFileSize = async (path: string) => (await readFileStats(path)).size;
 
-export function checkFileSizes(inputSize, outputSize) {
+export const readFileSizes = (paths: string[]) => pMap(paths, async (path) => readFileSize(path), { concurrency: 5 });
+
+export function checkFileSizes(inputSize: number, outputSize: number) {
   const diff = Math.abs(outputSize - inputSize);
   const relDiff = diff / inputSize;
   const maxDiffPercent = 5;
@@ -388,39 +348,35 @@ export function checkFileSizes(inputSize, outputSize) {
   return undefined;
 }
 
-function setDocumentExtraTitle(extra) {
-  const baseTitle = 'LosslessCut';
-  document.title = extra != null ? `${baseTitle} - ${extra}` : baseTitle;
-}
-
-export function setDocumentTitle({ filePath, working, cutProgress }: { filePath?: string | undefined, working?: string | undefined, cutProgress?: number | undefined }) {
+export function setDocumentTitle({ filePath, working, progress }: {
+  filePath?: string | undefined,
+  working?: string | undefined,
+  progress?: number | undefined }) {
   const parts: string[] = [];
-  if (filePath) parts.push(basename(filePath));
+
   if (working) {
-    parts.push('-', working);
-    if (cutProgress != null) parts.push(`${(cutProgress * 100).toFixed(1)}%`);
+    if (progress != null) parts.push(`${(progress * 100).toFixed(1)}%`);
+    parts.push(working);
   }
-  setDocumentExtraTitle(parts.length > 0 ? parts.join(' ') : undefined);
+
+  if (filePath) {
+    parts.push(basename(filePath));
+  }
+
+  parts.push(isStoreBuild ? appName : `${appName} ${appVersion}`);
+
+  document.title = parts.join(' - ');
 }
 
-export function mustDisallowVob() {
-  // Because Apple is being nazi about the ability to open "copy protected DVD files"
-  if (isMasBuild) {
-    toast.fire({ icon: 'error', text: 'Unfortunately .vob files are not supported in the App Store version of LosslessCut due to Apple restrictions' });
-    return true;
-  }
-  return false;
-}
-
-export async function readVideoTs(videoTsPath) {
+export async function readVideoTs(videoTsPath: string) {
   const files = await readdir(videoTsPath);
   const relevantFiles = files.filter((file) => /^vts_\d+_\d+\.vob$/i.test(file) && !/^vts_\d+_00\.vob$/i.test(file)); // skip menu
   const ret = sortBy(relevantFiles).map((file) => join(videoTsPath, file));
-  if (ret.length === 0) throw new Error('No VTS vob files found in folder');
+  if (ret.length === 0) throw new UserFacingError(i18n.t('No VTS vob files found in folder'));
   return ret;
 }
 
-export async function readDirRecursively(dirPath) {
+export async function readDirRecursively(dirPath: string) {
   const files = await readdir(dirPath, { recursive: true });
   const ret = (await pMap(files, async (path) => {
     if (['.DS_Store'].includes(basename(path))) return [];
@@ -432,19 +388,173 @@ export async function readDirRecursively(dirPath) {
     return [absPath];
   }, { concurrency: 5 })).flat();
 
-  if (ret.length === 0) throw new Error('No files found in folder');
+  if (ret.length === 0) throw new UserFacingError(i18n.t('No files found in folder'));
   return ret;
 }
 
-export function getImportProjectType(filePath) {
+export function getImportProjectType(filePath: string) {
   if (filePath.endsWith('Summary.txt')) return 'dv-analyzer-summary-txt';
-  const edlFormatForExtension = { csv: 'csv', pbf: 'pbf', edl: 'mplayer', cue: 'cue', xml: 'xmeml', fcpxml: 'fcpxml' };
-  const matchingExt = Object.keys(edlFormatForExtension).find((ext) => filePath.toLowerCase().endsWith(`.${ext}`));
+  const edlFormatForExtension = { csv: 'csv', pbf: 'pbf', edl: 'edl', cue: 'cue', xml: 'xmeml', fcpxml: 'fcpxml', otio: 'otio' } as const;
+  const matchingExt = Object.keys(edlFormatForExtension).find((ext) => filePath.toLowerCase().endsWith(`.${ext}`)) as keyof typeof edlFormatForExtension | undefined;
   if (!matchingExt) return undefined;
   return edlFormatForExtension[matchingExt];
 }
 
-export const calcShouldShowWaveform = (zoomedDuration) => (zoomedDuration != null && zoomedDuration < ffmpegExtractWindow * 8);
-export const calcShouldShowKeyframes = (zoomedDuration) => (zoomedDuration != null && zoomedDuration < ffmpegExtractWindow * 8);
+export function getFileSize(format: FFprobeFormat) {
+  const fileSize = parseInt(format.size, 10);
+  if (Number.isNaN(fileSize)) return undefined;
+  return fileSize;
+}
+
+export const calcShouldShowWaveform = (zoomedDuration: number | undefined) => (zoomedDuration != null && zoomedDuration < ffmpegExtractWindow * 8);
+export const calcShouldShowKeyframes = (zoomedDuration: number | undefined) => (zoomedDuration != null && zoomedDuration < ffmpegExtractWindow * 8);
 
 export const mediaSourceQualities = ['HD', 'SD', 'OG']; // OG is original
+
+export const splitKeyboardKeys = (keys: string) => keys.split('+');
+
+// source: https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values
+// copy([...new Set([temp1, temp2, temp3].map((t) => t.querySelectorAll('tr td:nth-child(3) code:first-child')).flatMap((l) => [...l]).map((code) => code.innerText.replace(/"/g, '')))].join('\n'))
+export const shiftModifiers = new Set(['ShiftLeft', 'ShiftRight']);
+export const controlModifiers = new Set(['ControlLeft', 'ControlRight']);
+export const altModifiers = new Set(['AltLeft', 'AltRight']);
+export const metaModifiers = new Set(['MetaLeft', 'MetaRight']);
+export const allModifiers = new Set([...shiftModifiers, ...controlModifiers, ...altModifiers, ...metaModifiers]);
+
+
+export function getMetaKeyName() {
+  if (isMac) return i18n.t('⌘ Cmd');
+  if (isWindows) return i18n.t('⊞ Win');
+  return i18n.t('Meta');
+}
+
+const keyCodeToDisplayName: Record<string, string> = {
+  Escape: 'Esc',
+  Digit1: '1',
+  Digit2: '2',
+  Digit3: '3',
+  Digit4: '4',
+  Digit5: '5',
+  Digit6: '6',
+  Digit7: '7',
+  Digit8: '8',
+  Digit9: '9',
+  Digit0: '0',
+  KeyQ: 'Q',
+  KeyW: 'W',
+  KeyE: 'E',
+  KeyR: 'R',
+  KeyT: 'T',
+  KeyY: 'Y',
+  KeyU: 'U',
+  KeyI: 'I',
+  KeyO: 'O',
+  KeyP: 'P',
+  KeyA: 'A',
+  KeyS: 'S',
+  KeyD: 'D',
+  KeyF: 'F',
+  KeyG: 'G',
+  KeyH: 'H',
+  KeyJ: 'J',
+  KeyK: 'K',
+  KeyL: 'L',
+  KeyZ: 'Z',
+  KeyX: 'X',
+  KeyC: 'C',
+  KeyV: 'V',
+  KeyB: 'B',
+  KeyN: 'N',
+  KeyM: 'M',
+  Minus: '-',
+  Equal: '=',
+  BracketLeft: '[',
+  BracketRight: ']',
+  Semicolon: ';',
+  Quote: '\'',
+  Backquote: '`',
+  Backslash: '\\',
+  Comma: ',',
+  Period: '.',
+  Slash: '/',
+  F1: 'F1',
+  F2: 'F2',
+  F3: 'F3',
+  F4: 'F4',
+  F5: 'F5',
+  F6: 'F6',
+  F7: 'F7',
+  F8: 'F8',
+  F9: 'F9',
+  F10: 'F10',
+  F11: 'F11',
+  F12: 'F12',
+  F13: 'F13',
+  F14: 'F14',
+  F15: 'F15',
+  F16: 'F16',
+  F17: 'F17',
+  F18: 'F18',
+  F19: 'F19',
+  F20: 'F20',
+  F21: 'F21',
+  F22: 'F22',
+  F23: 'F23',
+  F24: 'F24',
+  NumpadParenLeft: '(',
+  NumpadParenRight: ')',
+  PageUp: 'PgUp',
+  PageDown: 'PgDn',
+  ArrowUp: '↑',
+  ArrowLeft: '←',
+  ArrowRight: '→',
+  ArrowDown: '↓',
+  ControlLeft: 'Ctrl',
+  ControlRight: 'Ctrl',
+  ShiftLeft: 'Shift',
+  ShiftRight: 'Shift',
+  AltLeft: 'Alt',
+  AltRight: 'Alt',
+};
+
+export function getKeyDisplayName(code: string, keyboardLayoutMap: Map<string, string> | undefined): string | undefined {
+  if (code === 'MetaLeft' || code === 'MetaRight') {
+    return getMetaKeyName();
+  }
+  if (keyboardLayoutMap == null) {
+    return undefined;
+  }
+  return keyboardLayoutMap.get(code) ?? keyCodeToDisplayName[code] ?? code;
+}
+
+export function formatKeybinding(keys: string, keyboardLayoutMap: Map<string, string> | undefined): string | undefined {
+  const parts = splitKeyboardKeys(keys);
+  const names = parts.map((code) => getKeyDisplayName(code, keyboardLayoutMap));
+  if (names.some((n) => n == null)) return undefined;
+  return names.join('+');
+}
+
+export const getEnableImportChaptersOptions = (): Record<EnableImportChapters, string> => ({
+  always: i18n.t('Always'),
+  ask: i18n.t('Ask'),
+  never: i18n.t('Never'),
+} as const);
+
+export const dialogButtonOrder = isWindows ? 'rtl' : 'ltr'; // use ltr for mac and linux, rtl for windows
+
+export function shootConfetti(options?: confetti.Options) {
+  confetti({
+    particleCount: 30,
+    angle: 110,
+    startVelocity: 30,
+    spread: 40,
+    ticks: 25,
+    disableForReducedMotion: true,
+    origin: {
+      x: 0.98,
+      // since they fall down, start a bit higher than random
+      y: 1.03,
+    },
+    ...options,
+  });
+}

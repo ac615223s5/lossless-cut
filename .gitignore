@@ -14,7 +14,10 @@ node_modules
 /out
 /icon-build
 /build-resources
-/doc
+/notes
 /ffmpeg
-/app.log
-/ts-dist
+/app*.log
+/main-ts-dist
+/common-ts-dist
+
+tsconfig.*.tsbuildinfo

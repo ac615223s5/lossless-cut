@@ -1,13 +1,19 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import i18n from 'i18next';
-import { Config } from '../../../../types';
+import type { Transition } from 'motion/react';
+
+import type { Config } from '../../../common/types.js';
 
 import { errorToast } from '../swal';
 import isDev from '../isDev';
+import { mySpring, emitter as animationsEmitter } from '../animations';
 
 const { configStore } = window.require('@electron/remote').require('./index.js');
+const { systemPreferences } = window.require('@electron/remote');
 
-export default () => {
+const animationSettings = systemPreferences.getAnimationSettings();
+
+export default function useUserSettingsRoot() {
   const firstUpdateRef = useRef(true);
 
   function safeSetConfig<T extends keyof Config>(keyValue: Record<T, Config[T]>) {
@@ -29,10 +35,13 @@ export default () => {
 
   function safeGetConfig<T extends keyof Config>(key: T) {
     const rawVal = configStore.get(key);
-    if (rawVal === undefined) return undefined as typeof rawVal;
     // NOTE: Need to clone any non-primitive in renderer, or it will become very slow
     // I think because Electron is proxying objects over the bridge
-    const cloned: typeof rawVal = JSON.parse(JSON.stringify(rawVal));
+    const cloned: typeof rawVal = rawVal === undefined
+      ? undefined
+      // eslint-disable-next-line unicorn/prefer-structured-clone
+      : JSON.parse(JSON.stringify(rawVal));
+
     return cloned;
   }
 
@@ -41,14 +50,24 @@ export default () => {
   // Without this there was a huge performance issue https://github.com/mifi/lossless-cut/issues/1097
   const safeGetConfigInitial = <T extends keyof Config>(key: T) => () => safeGetConfig(key);
 
+  const [lastAppVersion, setLastAppVersion] = useState(safeGetConfigInitial('lastAppVersion'));
+  useEffect(() => safeSetConfig({ lastAppVersion }), [lastAppVersion]);
   const [captureFormat, setCaptureFormat] = useState(safeGetConfigInitial('captureFormat'));
   useEffect(() => safeSetConfig({ captureFormat }), [captureFormat]);
-  const [customOutDir, setCustomOutDir] = useState(safeGetConfigInitial('customOutDir'));
-  useEffect(() => safeSetConfig({ customOutDir }), [customOutDir]);
+  const [recentCustomOutDirs, setRecentCustomOutDirs] = useState(safeGetConfigInitial('recentCustomOutDirs'));
+  useEffect(() => safeSetConfig({ recentCustomOutDirs }), [recentCustomOutDirs]);
+  const [enableCustomOutDir, setEnableCustomOutDir] = useState(safeGetConfigInitial('enableCustomOutDir'));
+  useEffect(() => safeSetConfig({ enableCustomOutDir }), [enableCustomOutDir]);
   const [keyframeCut, setKeyframeCut] = useState(safeGetConfigInitial('keyframeCut'));
   useEffect(() => safeSetConfig({ keyframeCut }), [keyframeCut]);
+  const [preserveMetadata, setPreserveMetadata] = useState(safeGetConfigInitial('preserveMetadata'));
+  useEffect(() => safeSetConfig({ preserveMetadata }), [preserveMetadata]);
+  const [preserveMetadataOnMerge, setPreserveMetadataOnMerge] = useState(safeGetConfigInitial('preserveMetadataOnMerge'));
+  useEffect(() => safeSetConfig({ preserveMetadataOnMerge }), [preserveMetadataOnMerge]);
   const [preserveMovData, setPreserveMovData] = useState(safeGetConfigInitial('preserveMovData'));
   useEffect(() => safeSetConfig({ preserveMovData }), [preserveMovData]);
+  const [preserveChapters, setPreserveChapters] = useState(safeGetConfigInitial('preserveChapters'));
+  useEffect(() => safeSetConfig({ preserveChapters }), [preserveChapters]);
   const [movFastStart, setMovFastStart] = useState(safeGetConfigInitial('movFastStart'));
   useEffect(() => safeSetConfig({ movFastStart }), [movFastStart]);
   const [avoidNegativeTs, setAvoidNegativeTs] = useState(safeGetConfigInitial('avoidNegativeTs'));
@@ -63,8 +82,8 @@ export default () => {
   useEffect(() => safeSetConfig({ autoExportExtraStreams }), [autoExportExtraStreams]);
   const [askBeforeClose, setAskBeforeClose] = useState(safeGetConfigInitial('askBeforeClose'));
   useEffect(() => safeSetConfig({ askBeforeClose }), [askBeforeClose]);
-  const [enableAskForImportChapters, setEnableAskForImportChapters] = useState(safeGetConfigInitial('enableAskForImportChapters'));
-  useEffect(() => safeSetConfig({ enableAskForImportChapters }), [enableAskForImportChapters]);
+  const [enableImportChapters, setEnableImportChapters] = useState(safeGetConfigInitial('enableImportChapters'));
+  useEffect(() => safeSetConfig({ enableImportChapters }), [enableImportChapters]);
   const [enableAskForFileOpenAction, setEnableAskForFileOpenAction] = useState(safeGetConfigInitial('enableAskForFileOpenAction'));
   useEffect(() => safeSetConfig({ enableAskForFileOpenAction }), [enableAskForFileOpenAction]);
   const [playbackVolume, setPlaybackVolume] = useState(safeGetConfigInitial('playbackVolume'));
@@ -73,6 +92,8 @@ export default () => {
   useEffect(() => safeSetConfig({ autoSaveProjectFile }), [autoSaveProjectFile]);
   const [wheelSensitivity, setWheelSensitivity] = useState(safeGetConfigInitial('wheelSensitivity'));
   useEffect(() => safeSetConfig({ wheelSensitivity }), [wheelSensitivity]);
+  const [waveformHeight, setWaveformHeight] = useState(safeGetConfigInitial('waveformHeight'));
+  useEffect(() => safeSetConfig({ waveformHeight }), [waveformHeight]);
   const [invertTimelineScroll, setInvertTimelineScroll] = useState(safeGetConfigInitial('invertTimelineScroll'));
   useEffect(() => safeSetConfig({ invertTimelineScroll }), [invertTimelineScroll]);
   const [language, setLanguage] = useState(safeGetConfigInitial('language'));
@@ -81,6 +102,8 @@ export default () => {
   useEffect(() => safeSetConfig({ ffmpegExperimental }), [ffmpegExperimental]);
   const [hideNotifications, setHideNotifications] = useState(safeGetConfigInitial('hideNotifications'));
   useEffect(() => safeSetConfig({ hideNotifications }), [hideNotifications]);
+  const [hideOsNotifications, setHideOsNotifications] = useState(safeGetConfigInitial('hideOsNotifications'));
+  useEffect(() => safeSetConfig({ hideOsNotifications }), [hideOsNotifications]);
   const [autoLoadTimecode, setAutoLoadTimecode] = useState(safeGetConfigInitial('autoLoadTimecode'));
   useEffect(() => safeSetConfig({ autoLoadTimecode }), [autoLoadTimecode]);
   const [autoDeleteMergedSegments, setAutoDeleteMergedSegments] = useState(safeGetConfigInitial('autoDeleteMergedSegments'));
@@ -89,12 +112,14 @@ export default () => {
   useEffect(() => safeSetConfig({ exportConfirmEnabled }), [exportConfirmEnabled]);
   const [segmentsToChapters, setSegmentsToChapters] = useState(safeGetConfigInitial('segmentsToChapters'));
   useEffect(() => safeSetConfig({ segmentsToChapters }), [segmentsToChapters]);
-  const [preserveMetadataOnMerge, setPreserveMetadataOnMerge] = useState(safeGetConfigInitial('preserveMetadataOnMerge'));
-  useEffect(() => safeSetConfig({ preserveMetadataOnMerge }), [preserveMetadataOnMerge]);
   const [simpleMode, setSimpleMode] = useState(safeGetConfigInitial('simpleMode'));
   useEffect(() => safeSetConfig({ simpleMode }), [simpleMode]);
-  const [outSegTemplate, setOutSegTemplate] = useState(safeGetConfigInitial('outSegTemplate'));
-  useEffect(() => safeSetConfig({ outSegTemplate }), [outSegTemplate]);
+  const [cutFileTemplate, setCutFileTemplate] = useState(safeGetConfigInitial('outSegTemplate'));
+  useEffect(() => safeSetConfig({ outSegTemplate: cutFileTemplate }), [cutFileTemplate]);
+  const [cutMergedFileTemplate, setCutMergedFileTemplate] = useState(safeGetConfigInitial('mergedFileTemplate'));
+  useEffect(() => safeSetConfig({ mergedFileTemplate: cutMergedFileTemplate }), [cutMergedFileTemplate]);
+  const [mergedFileTemplate, setMergedFileTemplate] = useState(safeGetConfigInitial('mergedFilesTemplate'));
+  useEffect(() => safeSetConfig({ mergedFilesTemplate: mergedFileTemplate }), [mergedFileTemplate]);
   const [keyboardSeekAccFactor, setKeyboardSeekAccFactor] = useState(safeGetConfigInitial('keyboardSeekAccFactor'));
   useEffect(() => safeSetConfig({ keyboardSeekAccFactor }), [keyboardSeekAccFactor]);
   const [keyboardNormalSeekSpeed, setKeyboardNormalSeekSpeed] = useState(safeGetConfigInitial('keyboardNormalSeekSpeed'));
@@ -129,6 +154,12 @@ export default () => {
   useEffect(() => safeSetConfig({ enableOverwriteOutput }), [enableOverwriteOutput]);
   const [mouseWheelZoomModifierKey, setMouseWheelZoomModifierKey] = useState(safeGetConfigInitial('mouseWheelZoomModifierKey'));
   useEffect(() => safeSetConfig({ mouseWheelZoomModifierKey }), [mouseWheelZoomModifierKey]);
+  const [mouseWheelFrameSeekModifierKey, setMouseWheelFrameSeekModifierKey] = useState(safeGetConfigInitial('mouseWheelFrameSeekModifierKey'));
+  useEffect(() => safeSetConfig({ mouseWheelFrameSeekModifierKey }), [mouseWheelFrameSeekModifierKey]);
+  const [mouseWheelKeyframeSeekModifierKey, setMouseWheelKeyframeSeekModifierKey] = useState(safeGetConfigInitial('mouseWheelKeyframeSeekModifierKey'));
+  useEffect(() => safeSetConfig({ mouseWheelKeyframeSeekModifierKey }), [mouseWheelKeyframeSeekModifierKey]);
+  const [segmentMouseModifierKey, setSegmentMouseModifierKey] = useState(safeGetConfigInitial('segmentMouseModifierKey'));
+  useEffect(() => safeSetConfig({ segmentMouseModifierKey }), [segmentMouseModifierKey]);
   const [captureFrameMethod, setCaptureFrameMethod] = useState(safeGetConfigInitial('captureFrameMethod'));
   useEffect(() => safeSetConfig({ captureFrameMethod }), [captureFrameMethod]);
   const [captureFrameQuality, setCaptureFrameQuality] = useState(safeGetConfigInitial('captureFrameQuality'));
@@ -151,6 +182,21 @@ export default () => {
   useEffect(() => safeSetConfig({ outputFileNameMinZeroPadding }), [outputFileNameMinZeroPadding]);
   const [cutFromAdjustmentFrames, setCutFromAdjustmentFrames] = useState(safeGetConfigInitial('cutFromAdjustmentFrames'));
   useEffect(() => safeSetConfig({ cutFromAdjustmentFrames }), [cutFromAdjustmentFrames]);
+  const [cutToAdjustmentFrames, setCutToAdjustmentFrames] = useState(safeGetConfigInitial('cutToAdjustmentFrames'));
+  useEffect(() => safeSetConfig({ cutToAdjustmentFrames }), [cutToAdjustmentFrames]);
+  const [storeWindowBounds, setStoreWindowBounds] = useState(safeGetConfigInitial('storeWindowBounds'));
+  useEffect(() => safeSetConfig({ storeWindowBounds }), [storeWindowBounds]);
+  const [waveformMode, setWaveformMode] = useState(safeGetConfigInitial('waveformMode'));
+  useEffect(() => safeSetConfig({ waveformMode }), [waveformMode]);
+  const [thumbnailsEnabled, setThumbnailsEnabled] = useState(safeGetConfigInitial('thumbnailsEnabled'));
+  useEffect(() => safeSetConfig({ thumbnailsEnabled }), [thumbnailsEnabled]);
+  const [keyframesEnabled, setKeyframesEnabled] = useState(safeGetConfigInitial('keyframesEnabled'));
+  useEffect(() => safeSetConfig({ keyframesEnabled }), [keyframesEnabled]);
+  const [reducedMotion, setReducedMotion] = useState(safeGetConfigInitial('reducedMotion'));
+  useEffect(() => safeSetConfig({ reducedMotion }), [reducedMotion]);
+  const [ffmpegHwaccel, setFfmpegHwaccel] = useState(safeGetConfigInitial('ffmpegHwaccel'));
+  useEffect(() => safeSetConfig({ ffmpegHwaccel }), [ffmpegHwaccel]);
+
 
   const resetKeyBindings = useCallback(() => {
     configStore.reset('keyBindings');
@@ -165,115 +211,194 @@ export default () => {
     };
   }, []);
 
-  return {
+  const toggleDarkMode = useCallback(() => setDarkMode((v) => !v), []);
+
+  const prefersReducedMotion = useMemo(() => {
+    if (reducedMotion !== 'user') return reducedMotion === 'always';
+    // fallback to electron detected system setting
+    // note: user has to restart app for changes here to be detected
+    return animationSettings.prefersReducedMotion;
+  }, [reducedMotion]);
+
+  useEffect(() => {
+    animationsEmitter.emit('reducedMotion', prefersReducedMotion);
+  }, [prefersReducedMotion]);
+
+  const springAnimation = useMemo<Transition>(() => (prefersReducedMotion ? { duration: 0 } : mySpring), [prefersReducedMotion]);
+
+  const customOutDir = useMemo(() => (enableCustomOutDir ? recentCustomOutDirs[0] : undefined), [enableCustomOutDir, recentCustomOutDirs]);
+
+  const setCustomOutDir = useCallback((newDir: string | undefined) => {
+    if (newDir) {
+      setRecentCustomOutDirs((prev) => [
+        newDir,
+        ...prev.filter((d) => d !== newDir),
+      ].slice(0, 5)); // keep only the 5 most recent dirs
+      setEnableCustomOutDir(true);
+    } else {
+      setEnableCustomOutDir(false);
+    }
+  }, []);
+
+  // Note: settings are reported when reporting errors
+  // 🚨 Must be JSON-serializable!
+  const settings = {
+    lastAppVersion,
     captureFormat,
-    setCaptureFormat,
-    customOutDir,
-    setCustomOutDir,
+    recentCustomOutDirs,
+    enableCustomOutDir,
     keyframeCut,
-    setKeyframeCut,
-    preserveMovData,
-    setPreserveMovData,
-    movFastStart,
-    setMovFastStart,
-    avoidNegativeTs,
-    setAvoidNegativeTs,
-    autoMerge,
-    setAutoMerge,
-    timecodeFormat,
-    setTimecodeFormat,
-    invertCutSegments,
-    setInvertCutSegments,
-    autoExportExtraStreams,
-    setAutoExportExtraStreams,
-    askBeforeClose,
-    setAskBeforeClose,
-    enableAskForImportChapters,
-    setEnableAskForImportChapters,
-    enableAskForFileOpenAction,
-    setEnableAskForFileOpenAction,
-    playbackVolume,
-    setPlaybackVolume,
-    autoSaveProjectFile,
-    setAutoSaveProjectFile,
-    wheelSensitivity,
-    setWheelSensitivity,
-    invertTimelineScroll,
-    setInvertTimelineScroll,
-    language,
-    setLanguage,
-    ffmpegExperimental,
-    setFfmpegExperimental,
-    hideNotifications,
-    setHideNotifications,
-    autoLoadTimecode,
-    setAutoLoadTimecode,
-    autoDeleteMergedSegments,
-    setAutoDeleteMergedSegments,
-    exportConfirmEnabled,
-    setExportConfirmEnabled,
-    segmentsToChapters,
-    setSegmentsToChapters,
+    preserveMetadata,
     preserveMetadataOnMerge,
-    setPreserveMetadataOnMerge,
+    preserveMovData,
+    preserveChapters,
+    movFastStart,
+    avoidNegativeTs,
+    autoMerge,
+    timecodeFormat,
+    invertCutSegments,
+    autoExportExtraStreams,
+    askBeforeClose,
+    enableImportChapters,
+    enableAskForFileOpenAction,
+    playbackVolume,
+    autoSaveProjectFile,
+    wheelSensitivity,
+    waveformHeight,
+    invertTimelineScroll,
+    language,
+    ffmpegExperimental,
+    hideNotifications,
+    hideOsNotifications,
+    autoLoadTimecode,
+    autoDeleteMergedSegments,
+    exportConfirmEnabled,
+    segmentsToChapters,
     simpleMode,
-    setSimpleMode,
-    outSegTemplate,
-    setOutSegTemplate,
+    cutFileTemplate,
+    cutMergedFileTemplate,
+    mergedFileTemplate,
     keyboardSeekAccFactor,
-    setKeyboardSeekAccFactor,
     keyboardNormalSeekSpeed,
-    setKeyboardNormalSeekSpeed,
     keyboardSeekSpeed2,
-    setKeyboardSeekSpeed2,
     keyboardSeekSpeed3,
-    setKeyboardSeekSpeed3,
     treatInputFileModifiedTimeAsStart,
-    setTreatInputFileModifiedTimeAsStart,
     treatOutputFileModifiedTimeAsStart,
-    setTreatOutputFileModifiedTimeAsStart,
     outFormatLocked,
-    setOutFormatLocked,
     safeOutputFileName,
-    setSafeOutputFileName,
     enableAutoHtml5ify,
-    setEnableAutoHtml5ify,
     segmentsToChaptersOnly,
-    setSegmentsToChaptersOnly,
     keyBindings,
+    enableSmartCut,
+    customFfPath,
+    storeProjectInWorkingDir,
+    enableOverwriteOutput,
+    mouseWheelZoomModifierKey,
+    mouseWheelFrameSeekModifierKey,
+    mouseWheelKeyframeSeekModifierKey,
+    segmentMouseModifierKey,
+    captureFrameMethod,
+    captureFrameQuality,
+    captureFrameFileNameFormat,
+    enableNativeHevc,
+    enableUpdateCheck,
+    cleanupChoices,
+    allowMultipleInstances,
+    darkMode,
+    preferStrongColors,
+    outputFileNameMinZeroPadding,
+    cutFromAdjustmentFrames,
+    cutToAdjustmentFrames,
+    storeWindowBounds,
+    waveformMode,
+    thumbnailsEnabled,
+    keyframesEnabled,
+    reducedMotion,
+    ffmpegHwaccel,
+  };
+
+  return {
+    settings,
+
+    springAnimation,
+    customOutDir,
+
+    // setters
+    setLastAppVersion,
+    setCaptureFormat,
+    setCustomOutDir,
+    setRecentCustomOutDirs,
+    setKeyframeCut,
+    setPreserveMetadata,
+    setPreserveMetadataOnMerge,
+    setPreserveMovData,
+    setPreserveChapters,
+    setMovFastStart,
+    setAvoidNegativeTs,
+    setAutoMerge,
+    setTimecodeFormat,
+    setInvertCutSegments,
+    setAutoExportExtraStreams,
+    setAskBeforeClose,
+    setEnableImportChapters,
+    setEnableAskForFileOpenAction,
+    setPlaybackVolume,
+    setAutoSaveProjectFile,
+    setWheelSensitivity,
+    setWaveformHeight,
+    setInvertTimelineScroll,
+    setLanguage,
+    setFfmpegExperimental,
+    setHideNotifications,
+    setHideOsNotifications,
+    setAutoLoadTimecode,
+    setAutoDeleteMergedSegments,
+    setExportConfirmEnabled,
+    setSegmentsToChapters,
+    setSimpleMode,
+    setCutFileTemplate,
+    setCutMergedFileTemplate,
+    setMergedFileTemplate,
+    setKeyboardSeekAccFactor,
+    setKeyboardNormalSeekSpeed,
+    setKeyboardSeekSpeed2,
+    setKeyboardSeekSpeed3,
+    setTreatInputFileModifiedTimeAsStart,
+    setTreatOutputFileModifiedTimeAsStart,
+    setOutFormatLocked,
+    setSafeOutputFileName,
+    setEnableAutoHtml5ify,
+    setSegmentsToChaptersOnly,
     setKeyBindings,
     resetKeyBindings,
-    enableSmartCut,
     setEnableSmartCut,
-    customFfPath,
     setCustomFfPath,
-    storeProjectInWorkingDir,
     setStoreProjectInWorkingDir,
-    enableOverwriteOutput,
     setEnableOverwriteOutput,
-    mouseWheelZoomModifierKey,
     setMouseWheelZoomModifierKey,
-    captureFrameMethod,
+    setMouseWheelFrameSeekModifierKey,
+    setMouseWheelKeyframeSeekModifierKey,
+    setSegmentMouseModifierKey,
     setCaptureFrameMethod,
-    captureFrameQuality,
     setCaptureFrameQuality,
-    captureFrameFileNameFormat,
     setCaptureFrameFileNameFormat,
-    enableNativeHevc,
     setEnableNativeHevc,
-    enableUpdateCheck,
     setEnableUpdateCheck,
-    cleanupChoices,
     setCleanupChoices,
-    allowMultipleInstances,
     setAllowMultipleInstances,
-    darkMode,
-    setDarkMode,
-    preferStrongColors,
+    toggleDarkMode,
     setPreferStrongColors,
-    outputFileNameMinZeroPadding,
     setOutputFileNameMinZeroPadding,
-    cutFromAdjustmentFrames,
     setCutFromAdjustmentFrames,
+    setCutToAdjustmentFrames,
+    setStoreWindowBounds,
+    setWaveformMode,
+    setThumbnailsEnabled,
+    setKeyframesEnabled,
+    prefersReducedMotion,
+    setReducedMotion,
+    setFfmpegHwaccel,
   };
-};
+}
+
+export type UserSettingsRoot = ReturnType<typeof useUserSettingsRoot>;

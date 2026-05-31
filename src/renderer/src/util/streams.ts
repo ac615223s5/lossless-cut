@@ -1,17 +1,8 @@
-import { FFprobeStream, FFprobeStreamDisposition } from '../../../../ffprobe';
-import { ChromiumHTMLAudioElement, ChromiumHTMLVideoElement } from '../types';
+import invariant from 'tiny-invariant';
+import type { FFprobeStream, FFprobeStreamDisposition } from '../../../common/ffprobe';
+import type { AllFilesMeta, ChromiumHTMLAudioElement, ChromiumHTMLVideoElement, CopyfileStreams, LiteFFprobeStream } from '../types';
+import type { FileStream } from '../ffmpeg';
 
-// https://www.ffmpeg.org/doxygen/3.2/libavutil_2utils_8c_source.html#l00079
-const defaultProcessedCodecTypes = new Set([
-  'video',
-  'audio',
-  'subtitle',
-  'attachment',
-]);
-
-const unprocessableCodecs = new Set([
-  'dvb_teletext', // ffmpeg doesn't seem to support this https://github.com/mifi/lossless-cut/issues/1343
-]);
 
 // taken from `ffmpeg -codecs`
 export const pcmAudioCodecs = [
@@ -111,17 +102,24 @@ export function getActiveDisposition(disposition: FFprobeStreamDisposition | und
 
 export const isMov = (format: string | undefined) => format != null && ['ismv', 'ipod', 'mp4', 'mov'].includes(format);
 
+export const isMatroska = (format: string | undefined) => format != null && ['matroska', 'webm'].includes(format);
+
 type GetVideoArgsFn = (a: { streamIndex: number, outputIndex: number }) => string[] | undefined;
 
-function getPerStreamFlags({ stream, outputIndex, outFormat, manuallyCopyDisposition = false, getVideoArgs = () => undefined }: {
-  stream: FFprobeStream, outputIndex: number, outFormat: string, manuallyCopyDisposition?: boolean | undefined, getVideoArgs?: GetVideoArgsFn | undefined
+function getPerStreamFlags({ stream, outputIndex, outFormat, manuallyCopyDisposition = false, getVideoArgs = () => undefined, needFlac }: {
+  stream: LiteFFprobeStream,
+  outputIndex: number,
+  outFormat: string | undefined,
+  manuallyCopyDisposition?: boolean | undefined,
+  getVideoArgs?: GetVideoArgsFn | undefined,
+  needFlac: boolean | undefined,
 }) {
   let args: string[] = [];
 
-  function addArgs(...newArgs) {
+  function addArgs(...newArgs: string[]) {
     args.push(...newArgs);
   }
-  function addCodecArgs(codec) {
+  function addCodecArgs(codec: string) {
     addArgs(`-c:${outputIndex}`, codec);
   }
 
@@ -129,15 +127,17 @@ function getPerStreamFlags({ stream, outputIndex, outFormat, manuallyCopyDisposi
   if (stream.codec_type === 'subtitle') {
     // mp4/mov only supports mov_text, so convert it https://stackoverflow.com/a/17584272/6519037
     // https://github.com/mifi/lossless-cut/issues/418
-    if (isMov(outFormat) && stream.codec_name !== 'mov_text') {
+    // and dvb_subtitle cannot be converted to mov_text (it will give error "Subtitle encoding currently only possible from text to text or bitmap to bitmap")
+    if (isMov(outFormat) && !['dvb_subtitle', 'mov_text'].includes(stream.codec_name)) {
       addCodecArgs('mov_text');
     } else if (outFormat === 'matroska' && stream.codec_name === 'mov_text') {
       // matroska doesn't support mov_text, so convert it to SRT (popular codec)
       // https://github.com/mifi/lossless-cut/issues/418
       // https://www.reddit.com/r/PleX/comments/bcfvev/can_someone_eli5_subtitles/
       addCodecArgs('srt');
-    } else if (outFormat === 'webm' && stream.codec_name === 'mov_text') {
+    } else if (outFormat === 'webm' && stream.codec_name !== 'webvtt') {
       // Only WebVTT subtitles are supported for WebM.
+      // https://github.com/mifi/lossless-cut/issues/2179#issuecomment-2395413115
       addCodecArgs('webvtt');
     // eslint-disable-next-line unicorn/prefer-switch
     } else if (outFormat === 'srt') { // not technically lossless but why not
@@ -155,14 +155,21 @@ function getPerStreamFlags({ stream, outputIndex, outFormat, manuallyCopyDisposi
     // https://forum.doom9.org/showthread.php?t=174718
     // https://github.com/mifi/lossless-cut/issues/476
     // ffmpeg cannot encode pcm_bluray
-    if (outFormat !== 'mpegts' && stream.codec_name === 'pcm_bluray') {
+    if (stream.codec_name === 'pcm_bluray' && outFormat !== 'mpegts') {
       addCodecArgs('pcm_s24le');
+    } else if (stream.codec_name === 'pcm_dvd' && outFormat != null && ['matroska', 'mov'].includes(outFormat)) {
+      // https://github.com/mifi/lossless-cut/discussions/2092
+      // coolitnow-partial.vob
+      // https://superuser.com/questions/1272614/use-ffmpeg-to-merge-mpeg2-files-with-pcm-dvd-audio
+      addCodecArgs('pcm_s32le');
     } else if (outFormat === 'dv' && stream.codec_name === 'pcm_s16le' && stream.sample_rate !== '48000') {
       // DV seems to require 48kHz output
       // https://trac.ffmpeg.org/ticket/8352
       // I think DV format only supports PCM_S16LE https://github.com/FFmpeg/FFmpeg/blob/b92028346c35dad837dd1160930435d88bd838b5/libavformat/dvenc.c#L450
       addCodecArgs('pcm_s16le');
       addArgs(`-ar:${outputIndex}`, '48000'); // maybe technically not lossless?
+    } else if (outFormat === 'flac' && needFlac && stream.codec_name === 'flac') { // https://github.com/mifi/lossless-cut/issues/1809
+      addCodecArgs('flac'); // lossless because flac is a lossless codec
     } else {
       addCodecArgs('copy');
     }
@@ -172,14 +179,6 @@ function getPerStreamFlags({ stream, outputIndex, outFormat, manuallyCopyDisposi
       args = [...videoArgs];
     } else {
       addCodecArgs('copy');
-    }
-
-    if (isMov(outFormat)) {
-      // 0x31766568 see https://github.com/mifi/lossless-cut/issues/1444
-      // eslint-disable-next-line unicorn/prefer-switch, unicorn/no-lonely-if
-      if (['0x0000', '0x31637668', '0x31766568'].includes(stream.codec_tag) && stream.codec_name === 'hevc') {
-        addArgs(`-tag:${outputIndex}`, 'hvc1');
-      }
     }
   } else { // other stream types
     addCodecArgs('copy');
@@ -198,20 +197,35 @@ function getPerStreamFlags({ stream, outputIndex, outFormat, manuallyCopyDisposi
   return args;
 }
 
-export function getMapStreamsArgs({ startIndex = 0, outFormat, allFilesMeta, copyFileStreams, manuallyCopyDisposition, getVideoArgs }: {
-  startIndex?: number, outFormat: string, allFilesMeta, copyFileStreams: { streamIds: number[], path: string }[], manuallyCopyDisposition?: boolean, getVideoArgs?: GetVideoArgsFn,
+export type AllFilesStreamMeta = Record<string, Pick<AllFilesMeta[string], 'streams'>>;
+
+export const getStreamById = ({ allFilesMeta, streamId, path }: {
+  allFilesMeta: AllFilesStreamMeta,
+  streamId: number,
+  path: string,
+}) => allFilesMeta?.[path]?.streams.find((s) => s.index === streamId);
+
+export function getMapStreamsArgs({ startIndex = 0, outFormat, allFilesMeta, copyFileStreams, manuallyCopyDisposition, getVideoArgs, needFlac }: {
+  startIndex?: number,
+  outFormat: string | undefined,
+  allFilesMeta: AllFilesStreamMeta,
+  copyFileStreams: CopyfileStreams,
+  manuallyCopyDisposition?: boolean,
+  getVideoArgs?: GetVideoArgsFn,
+  needFlac?: boolean,
 }) {
   let args: string[] = [];
   let outputIndex = startIndex;
 
   copyFileStreams.forEach(({ streamIds, path }, fileIndex) => {
     streamIds.forEach((streamId) => {
-      const { streams } = allFilesMeta[path];
-      const stream = streams.find((s) => s.index === streamId);
+      const stream = getStreamById({ allFilesMeta, streamId, path });
+      invariant(stream != null);
+
       args = [
         ...args,
         '-map', `${fileIndex}:${streamId}`,
-        ...getPerStreamFlags({ stream, outputIndex, outFormat, manuallyCopyDisposition, getVideoArgs }),
+        ...getPerStreamFlags({ stream, outputIndex, outFormat, manuallyCopyDisposition, getVideoArgs, needFlac }),
       ];
       outputIndex += 1;
     });
@@ -220,22 +234,38 @@ export function getMapStreamsArgs({ startIndex = 0, outFormat, allFilesMeta, cop
 }
 
 export function shouldCopyStreamByDefault(stream: FFprobeStream) {
-  if (!defaultProcessedCodecTypes.has(stream.codec_type)) return false;
-  if (unprocessableCodecs.has(stream.codec_name)) return false;
-  return true;
+  // https://www.ffmpeg.org/doxygen/3.2/libavutil_2utils_8c_source.html#l00079
+  switch (stream.codec_type) {
+    case 'audio':
+    case 'attachment':
+    case 'video': {
+      return true;
+    }
+    case 'subtitle': {
+      return stream.codec_name !== 'dvb_teletext'; // ffmpeg doesn't seem to support this https://github.com/mifi/lossless-cut/issues/1343
+    }
+    case 'data': {
+      // can handle gopro gpmd https://github.com/mifi/lossless-cut/issues/2134
+      // no other data tracks are known to be supported (might be added later)
+      return stream.codec_name === 'bin_data' && stream.codec_tag_string === 'gpmd';
+    }
+
+    default: {
+      return false;
+    }
+  }
 }
 
 export const attachedPicDisposition = 'attached_pic';
 
-export type LiteFFprobeStream = Pick<FFprobeStream, 'index' | 'codec_type' | 'codec_tag' | 'codec_name' | 'disposition'>;
-
-export function isStreamThumbnail(stream: LiteFFprobeStream) {
+export function isStreamThumbnail(stream: Pick<FFprobeStream, 'codec_type' | 'disposition'>) {
   return stream && stream.codec_type === 'video' && stream.disposition?.[attachedPicDisposition] === 1;
 }
 
-export const getAudioStreams = <T extends LiteFFprobeStream>(streams: T[]) => streams.filter((stream) => stream.codec_type === 'audio');
-export const getRealVideoStreams = <T extends LiteFFprobeStream>(streams: T[]) => streams.filter((stream) => stream.codec_type === 'video' && !isStreamThumbnail(stream));
-export const getSubtitleStreams = <T extends LiteFFprobeStream>(streams: T[]) => streams.filter((stream) => stream.codec_type === 'subtitle');
+export const getAudioStreams = <T extends Pick<FFprobeStream, 'codec_type'>>(streams: T[]) => streams.filter((stream) => stream.codec_type === 'audio');
+export const getRealVideoStreams = <T extends Pick<FFprobeStream, 'codec_type' | 'disposition'>>(streams: T[]) => streams.filter((stream) => stream.codec_type === 'video' && !isStreamThumbnail(stream));
+export const getSubtitleStreams = <T extends Pick<FFprobeStream, 'codec_type'>>(streams: T[]) => streams.filter((stream) => stream.codec_type === 'subtitle');
+export const isGpsStream = <T extends Pick<FileStream, 'guessedType' | 'codec_type' | 'tags'>>(stream: T) => stream.codec_type === 'subtitle' && (stream.tags?.['handler_name'] === '\u0010DJI.Subtitle' || stream.guessedType === 'dji-gps-srt');
 
 // videoTracks/audioTracks seems to be 1-indexed, while ffmpeg is 0-indexes
 const getHtml5TrackId = (ffmpegTrackIndex: number) => String(ffmpegTrackIndex + 1);
@@ -243,8 +273,15 @@ const getHtml5TrackId = (ffmpegTrackIndex: number) => String(ffmpegTrackIndex + 
 const getHtml5VideoTracks = (video: ChromiumHTMLVideoElement) => [...(video.videoTracks ?? [])];
 const getHtml5AudioTracks = (audio: ChromiumHTMLAudioElement) => [...(audio.audioTracks ?? [])];
 
-export const getVideoTrackForStreamIndex = (video: ChromiumHTMLVideoElement, index) => getHtml5VideoTracks(video).find((videoTrack) => videoTrack.id === getHtml5TrackId(index));
-export const getAudioTrackForStreamIndex = (audio: ChromiumHTMLAudioElement, index) => getHtml5AudioTracks(audio).find((audioTrack) => audioTrack.id === getHtml5TrackId(index));
+const getVideoTrackForStreamIndex = (video: ChromiumHTMLVideoElement, index: number) => getHtml5VideoTracks(video).find((videoTrack) => videoTrack.id === getHtml5TrackId(index));
+const getAudioTrackForStreamIndex = (audio: ChromiumHTMLAudioElement, index: number) => getHtml5AudioTracks(audio).find((audioTrack) => audioTrack.id === getHtml5TrackId(index));
+
+// although not technically correct, if video and audio index is null, assume that we can play
+// the user can select an audio/video track if they want ffmpeg assisted playback
+export const canHtml5PlayerPlayStreams = (videoEl: ChromiumHTMLVideoElement, videoIndex: number | undefined, audioIndex: number | undefined) => (
+  (videoIndex == null || getVideoTrackForStreamIndex(videoEl, videoIndex) != null)
+  && (audioIndex == null || getAudioTrackForStreamIndex(videoEl, audioIndex) != null)
+);
 
 function resetVideoTrack(video: ChromiumHTMLVideoElement) {
   console.log('Resetting video track');
@@ -265,6 +302,7 @@ function resetAudioTrack(video: ChromiumHTMLVideoElement) {
 // https://github.com/mifi/lossless-cut/issues/256
 export function enableVideoTrack(video: ChromiumHTMLVideoElement, index: number | undefined) {
   if (index == null) {
+    console.log('Resetting video track');
     resetVideoTrack(video);
     return;
   }
@@ -277,6 +315,7 @@ export function enableVideoTrack(video: ChromiumHTMLVideoElement, index: number 
 
 export function enableAudioTrack(video: ChromiumHTMLVideoElement, index: number | undefined) {
   if (index == null) {
+    console.log('Resetting audio track');
     resetAudioTrack(video);
     return;
   }
@@ -334,19 +373,30 @@ export async function doesPlayerSupportHevcPlayback() {
 // so we will detect these codecs and convert to dummy
 // "properly handle" here means either play it back or give a playback error if the video codec is not supported
 // todo maybe improve https://github.com/mifi/lossless-cut/issues/88#issuecomment-1363828563
-export function willPlayerProperlyHandleVideo({ streams, hevcPlaybackSupported }: {
-  streams: FFprobeStream[], hevcPlaybackSupported: boolean,
+export function willPlayerProperlyHandleVideo({ streams, hevcPlaybackSupported, isMasBuild }: {
+  streams: FFprobeStream[],
+  hevcPlaybackSupported: boolean,
+  isMasBuild: boolean,
 }) {
   const realVideoStreams = getRealVideoStreams(streams);
   // If audio-only format, assume all is OK
   if (realVideoStreams.length === 0) return true;
+
+  // https://github.com/mifi/lossless-cut/issues/2562
+  // https://github.com/mifi/lossless-cut/issues/2548
+  // https://github.com/electron/electron/issues/47947
+  if (isMasBuild && realVideoStreams.some((s) => s.color_space != null && ['bt2020nc', 'bt2020_ncl', 'bt2020c', 'bt2020_cl'].includes(s.color_space) && s.color_primaries === 'bt2020')) {
+    return false;
+  }
+
   // If we have at least one video that is NOT of the unsupported formats, assume the player will be able to play it natively
   // But cover art / thumbnail streams don't count e.g. hevc with a png stream (disposition.attached_pic=1)
   // https://github.com/mifi/lossless-cut/issues/595
   // https://github.com/mifi/lossless-cut/issues/975
   // https://github.com/mifi/lossless-cut/issues/1407
   // https://github.com/mifi/lossless-cut/issues/1505 https://samples.ffmpeg.org/archive/video/mjpeg/mov+mjpeg+pcm_u8++MPlayerRC1PlaybackCrash_david@pastornet.net.au.mov
-  const chromiumSilentlyFailCodecs = ['prores', 'mpeg4', 'mpeg2video', 'tscc2', 'dvvideo', 'mjpeg'];
+  // https://github.com/mifi/lossless-cut/issues/2110
+  const chromiumSilentlyFailCodecs = ['prores', 'mpeg4', 'mpeg2video', 'tscc2', 'dvvideo', 'mjpeg', 'ffv1'];
   if (!hevcPlaybackSupported) chromiumSilentlyFailCodecs.push('hevc');
   return realVideoStreams.some((stream) => !chromiumSilentlyFailCodecs.includes(stream.codec_name));
 }
@@ -355,10 +405,10 @@ export function isAudioDefinitelyNotSupported(streams: FFprobeStream[]) {
   const audioStreams = getAudioStreams(streams);
   if (audioStreams.length === 0) return false;
   // TODO this could be improved
-  return audioStreams.every((stream) => ['ac3', 'eac3'].includes(stream.codec_name));
+  return audioStreams.every((stream) => ['ac3', 'eac3', 'dts'].includes(stream.codec_name));
 }
 
-export function getVideoTimebase(videoStream: FFprobeStream) {
+export function getVideoTimebase(videoStream: Pick<FFprobeStream, 'time_base'>) {
   const timebaseMatch = videoStream.time_base && videoStream.time_base.split('/');
   if (timebaseMatch) {
     const timebaseParsed = parseInt(timebaseMatch[1]!, 10);

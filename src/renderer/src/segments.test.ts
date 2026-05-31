@@ -1,9 +1,9 @@
-import { test, it, expect } from 'vitest';
+import { test, it, expect, describe } from 'vitest';
 
-import { convertSegmentsToChapters, partitionIntoOverlappingRanges, getSegApparentEnd, formatSegNum } from './segments';
+import { convertSegmentsToChaptersWithGaps, partitionIntoOverlappingRanges, formatSegNum, combineOverlappingSegments, invertSegments } from './segments';
 
 it('converts segments to chapters with gaps', () => {
-  expect(convertSegmentsToChapters([
+  expect(convertSegmentsToChaptersWithGaps([
     {
       start: 104.612,
       end: 189.053,
@@ -27,8 +27,8 @@ it('converts segments to chapters with gaps', () => {
   ])).toMatchSnapshot();
 });
 
-it('converts segments to chapters with no gaps', () => {
-  expect(convertSegmentsToChapters([
+it('converts segments to chapters with no gaps when adjacent', () => {
+  expect(convertSegmentsToChaptersWithGaps([
     {
       start: 0,
       end: 2,
@@ -43,7 +43,7 @@ it('converts segments to chapters with no gaps', () => {
 });
 
 it('converts segments to chapters with single long segment', () => {
-  expect(convertSegmentsToChapters([
+  expect(convertSegmentsToChaptersWithGaps([
     {
       start: 0,
       end: 1,
@@ -105,9 +105,7 @@ it('detects overlapping segments, undefined end', () => {
   expect(partitionIntoOverlappingRanges([
     { start: 1, end: undefined },
     { start: 1.5, end: undefined },
-  ], undefined, (seg) => getSegApparentEnd(seg, 2))).toEqual([
-    [{ start: 1, end: undefined }, { start: 1.5, end: undefined }],
-  ]);
+  ])).toEqual([]);
 });
 
 test('formatSegNum', () => {
@@ -116,4 +114,125 @@ test('formatSegNum', () => {
 
   expect(formatSegNum(0, 10, 2)).toBe('01');
   expect(formatSegNum(0, 10, 3)).toBe('001');
+});
+
+describe('invertSegments', () => {
+  test('normal', () => {
+    expect(invertSegments([
+      { start: 1, name: 'Marker 1' },
+      { start: 2, end: 3, name: 'Segment 2' },
+      { start: 5, name: 'Segment 3' },
+    ], true, true, 100)).toMatchSnapshot();
+  });
+
+  test('none', () => {
+    expect(invertSegments([], true, true, 100)).toMatchSnapshot();
+  });
+
+  test('adjacent', () => {
+    expect(invertSegments([
+      { start: 2, end: 3, name: 'Segment 1' },
+      { start: 3, end: 4, name: 'Segment 2' },
+    ], true, true, 100)).toMatchSnapshot();
+  });
+
+  test('overlap 1', () => {
+    expect(invertSegments([
+      { start: 2, end: 3.5 },
+      { start: 3, end: 4 },
+    ], true, true, 100)).toMatchSnapshot();
+  });
+
+  test('overlap 2', () => {
+    expect(invertSegments([
+      { start: 2, end: 5 },
+      { start: 3, end: 4 },
+    ], true, true, 100)).toMatchSnapshot();
+  });
+
+  test('undefined duration', () => {
+    expect(invertSegments([
+      { start: 3, name: 'Marker 1' },
+    ], true, true)).toMatchSnapshot();
+  });
+
+  test('undefined duration 2', () => {
+    expect(invertSegments([
+      { start: 3 },
+    ], false, false)).toMatchSnapshot();
+  });
+});
+
+describe('combineOverlappingSegments', () => {
+  test('non touching', () => {
+    expect(combineOverlappingSegments([
+      { start: 1, end: 2 },
+      { start: 3, end: 4 },
+    ])).toMatchSnapshot();
+  });
+  test('overlapping and non overlapping', () => {
+    expect(combineOverlappingSegments([
+      { start: 1, end: 2 },
+      { start: 1.5, end: 3 },
+      { start: 4, end: 5 },
+    ])).toMatchSnapshot();
+  });
+  test('adjacent', () => {
+    expect(combineOverlappingSegments([
+      { start: 1, end: 2 },
+      { start: 2, end: 3 },
+      { start: 3, end: 4 },
+    ])).toMatchSnapshot();
+  });
+
+  test('various', () => {
+    const segments = [
+      {
+        start: 0,
+      },
+      {
+        start: 838,
+        end: 1101,
+      },
+      {
+        start: 1101,
+        end: 1244,
+      },
+      {
+        start: 1216,
+        end: 1487,
+      },
+      {
+        start: 1487,
+      },
+      {
+        start: 1625,
+      },
+      {
+        start: 503,
+        end: 669,
+      },
+      {
+        start: 392,
+        end: 716,
+      },
+      {
+        start: 229,
+        end: 784,
+      },
+      {
+        start: 0,
+        end: 87,
+      },
+      {
+        start: 1561,
+        end: 1831,
+      },
+      {
+        start: 2027,
+      },
+    ];
+
+    expect(combineOverlappingSegments(segments)).toMatchSnapshot();
+  });
 });

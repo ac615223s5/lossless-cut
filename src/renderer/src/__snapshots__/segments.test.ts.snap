@@ -1,5 +1,82 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`combineOverlappingSegments > adjacent 1`] = `
+[
+  {
+    "end": 2,
+    "start": 1,
+  },
+  {
+    "end": 3,
+    "start": 2,
+  },
+  {
+    "end": 4,
+    "start": 3,
+  },
+]
+`;
+
+exports[`combineOverlappingSegments > non touching 1`] = `
+[
+  {
+    "end": 2,
+    "start": 1,
+  },
+  {
+    "end": 4,
+    "start": 3,
+  },
+]
+`;
+
+exports[`combineOverlappingSegments > overlapping and non overlapping 1`] = `
+[
+  {
+    "end": 3,
+    "start": 1,
+  },
+  {
+    "end": 5,
+    "start": 4,
+  },
+]
+`;
+
+exports[`combineOverlappingSegments > various 1`] = `
+[
+  {
+    "start": 0,
+  },
+  {
+    "end": 87,
+    "start": 0,
+  },
+  {
+    "end": 784,
+    "start": 229,
+  },
+  {
+    "end": 1101,
+    "start": 838,
+  },
+  {
+    "end": 1487,
+    "start": 1101,
+  },
+  {
+    "start": 1487,
+  },
+  {
+    "end": 1831,
+    "start": 1561,
+  },
+  {
+    "start": 2027,
+  },
+]
+`;
+
 exports[`converts segments to chapters with gaps 1`] = `
 [
   {
@@ -37,7 +114,7 @@ exports[`converts segments to chapters with gaps 1`] = `
 ]
 `;
 
-exports[`converts segments to chapters with no gaps 1`] = `
+exports[`converts segments to chapters with no gaps when adjacent 1`] = `
 [
   {
     "end": 2,
@@ -61,3 +138,63 @@ exports[`converts segments to chapters with single long segment 1`] = `
   },
 ]
 `;
+
+exports[`invertSegments > adjacent 1`] = `
+[
+  {
+    "end": 2,
+    "start": 0,
+  },
+  {
+    "end": 100,
+    "name": "Segment 2",
+    "start": 4,
+  },
+]
+`;
+
+exports[`invertSegments > none 1`] = `[]`;
+
+exports[`invertSegments > normal 1`] = `
+[
+  {
+    "end": 1,
+    "start": 0,
+  },
+  {
+    "end": 2,
+    "name": "Marker 1",
+    "start": 1,
+  },
+  {
+    "end": 5,
+    "name": "Segment 2",
+    "start": 3,
+  },
+  {
+    "end": 100,
+    "name": "Segment 3",
+    "start": 5,
+  },
+]
+`;
+
+exports[`invertSegments > overlap 1 1`] = `[]`;
+
+exports[`invertSegments > overlap 2 1`] = `[]`;
+
+exports[`invertSegments > undefined duration 1`] = `
+[
+  {
+    "end": 3,
+    "start": 0,
+  },
+  {
+    "end": undefined,
+    "name": "Marker 1",
+    "start": 3,
+  },
+]
+`;
+
+exports[`invertSegments > undefined duration 2 1`] = `[]`;

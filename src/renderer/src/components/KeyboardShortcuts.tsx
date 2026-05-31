@@ -1,55 +1,58 @@
-import { memo, Fragment, useEffect, useMemo, useCallback, useState, ReactNode, SetStateAction, Dispatch, useRef } from 'react';
+import type { ReactNode, SetStateAction, Dispatch } from 'react';
+import { memo, Fragment, useEffect, useMemo, useCallback, useState, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { SearchInput, PlusIcon, InlineAlert, UndoIcon, Paragraph, TakeActionIcon, IconButton, Button, DeleteIcon, AddIcon, Dialog } from 'evergreen-ui';
-import { FaMouse, FaPlus, FaStepForward, FaStepBackward } from 'react-icons/fa';
-import Mousetrap from 'mousetrap';
+import { FaMouse, FaPlus, FaStepForward, FaStepBackward, FaUndo, FaTrash, FaSave, FaHammer } from 'react-icons/fa';
 import groupBy from 'lodash/groupBy';
 import orderBy from 'lodash/orderBy';
 import uniq from 'lodash/uniq';
+import { AnimatePresence, motion } from 'motion/react';
 
 import useUserSettings from '../hooks/useUserSettings';
-import Swal from '../swal';
 import SetCutpointButton from './SetCutpointButton';
 import SegmentCutpointButton from './SegmentCutpointButton';
 import { getModifier } from '../hooks/useTimelineScroll';
-import { KeyBinding, KeyboardAction } from '../../../../types';
-import { StateSegment } from '../types';
-import Sheet from './Sheet';
+import type { KeyBinding, KeyboardAction, ModifierKey } from '../../../common/types';
+import type { StateSegment } from '../types';
+import { allModifiers, altModifiers, controlModifiers, metaModifiers, shiftModifiers, splitKeyboardKeys } from '../util';
+import * as Dialog from './Dialog';
+import Warning from './Warning';
+import Button, { DialogButton } from './Button';
+import Action from './Action';
+import TextInput from './TextInput';
+import Kbd from './Kbd';
+import { useAppContext } from '../contexts';
 
 
 type Category = string;
 
 type ActionsMap = Record<KeyboardAction, { name: string, category?: Category, before?: ReactNode }>;
 
+
 const renderKeys = (keys: string[]) => keys.map((key, i) => (
   <Fragment key={key}>
-    {i > 0 && <FaPlus style={{ fontSize: '.4em', opacity: 0.8, marginLeft: '.4em', marginRight: '.4em' }} />}
-    <kbd>{key.toUpperCase()}</kbd>
+    {i > 0 && <FaPlus style={{ verticalAlign: 'middle', fontSize: '.4em', opacity: 0.8, marginLeft: '.4em', marginRight: '.4em' }} />}
+    <Kbd code={key} />
   </Fragment>
 ));
 
-// From https://craig.is/killing/mice
 // For modifier keys you can use shift, ctrl, alt, or meta.
 // You can substitute option for alt and command for meta.
-const allModifiers = new Set(['shift', 'ctrl', 'alt', 'meta']);
 function fixKeys(keys: string[]) {
-  const replaced = keys.map((key) => {
-    if (key === 'option') return 'alt';
-    if (key === 'command') return 'meta';
-    return key;
-  });
-  const uniqed = uniq(replaced);
+  const uniqed = uniq(keys);
   const nonModifierKeys = keys.filter((key) => !allModifiers.has(key));
   if (nonModifierKeys.length === 0) return []; // only modifiers is invalid
   if (nonModifierKeys.length > 1) return []; // can only have one non-modifier
-  return orderBy(uniqed, [(key) => key !== 'shift', (key) => key !== 'ctrl', (key) => key !== 'alt', (key) => key !== 'meta', (key) => key]);
+  return orderBy(uniqed, [(key) => !shiftModifiers.has(key), (key) => !controlModifiers.has(key), (key) => !altModifiers.has(key), (key) => !metaModifiers.has(key), (key) => key]);
 }
 
 // eslint-disable-next-line react/display-name
 const CreateBinding = memo(({
   actionsMap, action, setCreatingBinding, onNewKeyBindingConfirmed,
 }: {
-  actionsMap: ActionsMap, action: KeyboardAction | undefined, setCreatingBinding: Dispatch<SetStateAction<KeyboardAction | undefined>>, onNewKeyBindingConfirmed: (a: KeyboardAction, keys: string[]) => void,
+  actionsMap: ActionsMap,
+  action: KeyboardAction | undefined,
+  setCreatingBinding: Dispatch<SetStateAction<KeyboardAction | undefined>>,
+  onNewKeyBindingConfirmed: (a: KeyboardAction, keys: string[]) => void,
 }) => {
   const { t } = useTranslation();
 
@@ -61,6 +64,8 @@ const CreateBinding = memo(({
 
   useEffect(() => {
     if (isShown) {
+      // todo
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setKeysDown([]);
     }
   }, [isShown]);
@@ -70,64 +75,99 @@ const CreateBinding = memo(({
   useEffect(() => {
     if (!isShown) return undefined;
 
-    const mousetrap = new Mousetrap();
-    function handleKey(character: string, _modifiers: unknown, e: { type: string, preventDefault: () => void }) {
-      if (['keydown', 'keypress'].includes(e.type)) {
-        addKeyDown(character);
-      }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // console.log(e)
+      addKeyDown(e.code);
       e.preventDefault();
-    }
-    const handleKeyOrig = mousetrap.handleKey;
-    mousetrap.handleKey = handleKey;
+      e.stopPropagation();
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
 
     return () => {
-      mousetrap.handleKey = handleKeyOrig;
+      document.removeEventListener('keydown', handleKeyDown);
     };
   }, [addKeyDown, isShown]);
 
   const isComboInvalid = validKeysDown.length === 0 && keysDown.length > 0;
 
+  const fixedKeys = useMemo(() => fixKeys(keysDown), [keysDown]);
+
+  if (action == null) return null;
+
   return (
-    <Dialog
-      title={t('Bind new key to action')}
-      isShown={action != null}
-      confirmLabel={t('Save')}
-      cancelLabel={t('Cancel')}
-      onCloseComplete={() => setCreatingBinding(undefined)}
-      onConfirm={() => action != null && onNewKeyBindingConfirmed(action, keysDown)}
-      onCancel={() => setCreatingBinding(undefined)}
-    >
-      {isShown ? (
-        <div style={{ color: 'black' }}>
-          <Paragraph marginBottom={10}><TakeActionIcon verticalAlign="middle" marginRight={5} /> {actionsMap[action].name} <span style={{ color: 'rgba(0,0,0,0.5)' }}>({action})</span></Paragraph>
+    <Dialog.Root open={isShown} onOpenChange={(v) => v === false && setCreatingBinding(undefined)}>
+      <Dialog.Portal>
+        <Dialog.Overlay />
+        <Dialog.Content style={{ width: '40em' }} aria-describedby={undefined}>
+          <Dialog.Title>{t('Bind new key to action')}</Dialog.Title>
 
-          <Paragraph>{t('Please press your desired key combination. Make sure it doesn\'t conflict with any other binding or system hotkeys.')}</Paragraph>
+          <p>{t('Action:')} {actionsMap[action].name} <span style={{ color: 'var(--gray-10)', marginLeft: '.5em' }}><Action name={action} /></span></p>
 
-          <div style={{ margin: '20px 0' }}>{renderKeys(validKeysDown.length > 0 ? validKeysDown : keysDown)}</div>
+          <p>{t('Please press your desired key combination. Make sure it doesn\'t conflict with any other binding or system hotkeys.')}</p>
 
-          {isComboInvalid && <InlineAlert marginBottom={20} intent="danger">{t('Combination is invalid')}</InlineAlert>}
+          <div style={{ minHeight: '2em' }}>{renderKeys(validKeysDown.length > 0 ? validKeysDown : keysDown)}</div>
 
-          <div>
-            {!keysDown.includes('esc') && <Button iconBefore={PlusIcon} onClick={() => addKeyDown('esc')}>ESC</Button>}
-            {keysDown.length > 0 && <Button intent="warning" iconBefore={UndoIcon} onClick={() => setKeysDown([])}>{t('Start over')}</Button>}
+          <AnimatePresence>
+            {isComboInvalid && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+              >
+                <Warning style={{ paddingBottom: '1em' }}>{t('Combination is invalid')}</Warning>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div style={{ marginBottom: '1em', display: 'flex', gap: '.5em', flexWrap: 'wrap' }}>
+            {!keysDown.includes('esc') && <Button style={{ padding: '.2em .4em' }} onClick={() => addKeyDown('esc')}>ESC</Button>}
+            {keysDown.length > 0 && (
+              <Button onClick={() => setKeysDown([])}><FaUndo style={{ fontSize: '.8em', verticalAlign: 'middle', marginRight: '.3em' }} />{t('Start over')}</Button>
+            )}
           </div>
-        </div>
-      ) : <div />}
-    </Dialog>
+
+          <Dialog.ButtonRow>
+            <DialogButton disabled={fixedKeys.length === 0 || isComboInvalid} onClick={() => action != null && onNewKeyBindingConfirmed(action, keysDown)} primary>
+              <FaSave style={{ marginRight: '.3em', verticalAlign: 'middle' }} />{t('Save')}
+            </DialogButton>
+          </Dialog.ButtonRow>
+
+          <Dialog.CloseButton />
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 });
 
 const rowStyle = { display: 'flex', alignItems: 'center', borderBottom: '1px solid rgba(0,0,0,0.1)', paddingBottom: '.2em' };
 
+function WheelModifier({ text, wheelText, modifier }: { text: string, wheelText: string, modifier: ModifierKey }) {
+  return (
+    <div style={{ ...rowStyle, alignItems: 'center' }}>
+      <span>{text}</span>
+      <div style={{ flexGrow: 1 }} />
+      <kbd style={{ marginRight: '.7em' }}>{getModifier(modifier)}</kbd>
+      <FaMouse style={{ marginRight: '.3em' }} />
+      <span>{wheelText}</span>
+    </div>
+  );
+}
+
 // eslint-disable-next-line react/display-name
 const KeyboardShortcuts = memo(({
-  keyBindings, setKeyBindings, resetKeyBindings, currentCutSeg,
+  keyBindings, setKeyBindings, resetKeyBindings, currentCutSeg, onTriggerActionClick,
 }: {
-  keyBindings: KeyBinding[], setKeyBindings: Dispatch<SetStateAction<KeyBinding[]>>, resetKeyBindings: () => void, currentCutSeg: StateSegment,
+  keyBindings: KeyBinding[],
+  setKeyBindings: Dispatch<SetStateAction<KeyBinding[]>>,
+  resetKeyBindings: () => void,
+  currentCutSeg: StateSegment | undefined,
+  onTriggerActionClick: (action: KeyboardAction) => void,
 }) => {
   const { t } = useTranslation();
+  const { updateKeyboardLayout, confirmDialog } = useAppContext();
 
-  const { mouseWheelZoomModifierKey } = useUserSettings();
+  const { mouseWheelZoomModifierKey, mouseWheelFrameSeekModifierKey, mouseWheelKeyframeSeekModifierKey, segmentMouseModifierKey } = useUserSettings();
 
   const { actionsMap, extraLinesPerCategory } = useMemo(() => {
     const playbackCategory = t('Playback');
@@ -190,12 +230,20 @@ const KeyboardShortcuts = memo(({
         name: t('Decrease audio volume'),
         category: playbackCategory,
       },
+      toggleMuted: {
+        name: t('Mute preview'),
+        category: playbackCategory,
+      },
       reloadFile: {
         name: t('Reload current media'),
         category: playbackCategory,
       },
       html5ify: {
         name: t('Convert to supported format'),
+        category: playbackCategory,
+      },
+      makeCursorTimeZero: {
+        name: t('Make cursor time zero'),
         category: playbackCategory,
       },
 
@@ -212,8 +260,12 @@ const KeyboardShortcuts = memo(({
         name: t('Loop beginning and end of current segment'),
         category: selectivePlaybackCategory,
       },
-      toggleLoopSelectedSegments: {
+      togglePlaySelectedSegments: {
         name: t('Play selected segments in order'),
+        category: selectivePlaybackCategory,
+      },
+      toggleLoopSelectedSegments: {
+        name: t('Loop selected segments in order'),
         category: selectivePlaybackCategory,
       },
 
@@ -294,6 +346,10 @@ const KeyboardShortcuts = memo(({
         name: t('Add cut segment'),
         category: segmentsAndCutpointsCategory,
       },
+      removeCurrentCutpoint: {
+        name: t('Remove current segment cutpoint'),
+        category: segmentsAndCutpointsCategory,
+      },
       removeCurrentSegment: {
         name: t('Remove current segment'),
         category: segmentsAndCutpointsCategory,
@@ -324,6 +380,10 @@ const KeyboardShortcuts = memo(({
         name: t('Focus segment at cursor'),
         category: segmentsAndCutpointsCategory,
       },
+      selectSegmentsAtCursor: {
+        name: t('Select segments at cursor'),
+        category: segmentsAndCutpointsCategory,
+      },
       duplicateCurrentSegment: {
         name: t('Duplicate current segment'),
         category: segmentsAndCutpointsCategory,
@@ -332,16 +392,32 @@ const KeyboardShortcuts = memo(({
         name: t('Jump to previous segment'),
         category: segmentsAndCutpointsCategory,
       },
+      jumpSeekPrevSegment: {
+        name: t('Jump & seek to previous segment'),
+        category: segmentsAndCutpointsCategory,
+      },
       jumpNextSegment: {
         name: t('Jump to next segment'),
+        category: segmentsAndCutpointsCategory,
+      },
+      jumpSeekNextSegment: {
+        name: t('Jump & seek to next segment'),
         category: segmentsAndCutpointsCategory,
       },
       jumpFirstSegment: {
         name: t('Jump to first segment'),
         category: segmentsAndCutpointsCategory,
       },
+      jumpSeekFirstSegment: {
+        name: t('Jump & seek to first segment'),
+        category: segmentsAndCutpointsCategory,
+      },
       jumpLastSegment: {
         name: t('Jump to last segment'),
+        category: segmentsAndCutpointsCategory,
+      },
+      jumpSeekLastSegment: {
+        name: t('Jump & seek to last segment'),
         category: segmentsAndCutpointsCategory,
       },
       reorderSegsByStartTime: {
@@ -374,6 +450,10 @@ const KeyboardShortcuts = memo(({
       },
       createNumSegments: {
         name: t('Create num segments'),
+        category: segmentsAndCutpointsCategory,
+      },
+      createFixedByteSizedSegments: {
+        name: t('Create byte sized segments'),
         category: segmentsAndCutpointsCategory,
       },
       createRandomSegments: {
@@ -415,6 +495,10 @@ const KeyboardShortcuts = memo(({
         name: t('Select only this segment'),
         category: segmentsAndCutpointsCategory,
       },
+      toggleCurrentSegmentSelected: {
+        name: t('Toggle current segment selected'),
+        category: segmentsAndCutpointsCategory,
+      },
       deselectAllSegments: {
         name: t('Deselect all segments'),
         category: segmentsAndCutpointsCategory,
@@ -423,8 +507,20 @@ const KeyboardShortcuts = memo(({
         name: t('Select all segments'),
         category: segmentsAndCutpointsCategory,
       },
-      toggleCurrentSegmentSelected: {
-        name: t('Toggle current segment selected'),
+      selectAllMarkers: {
+        name: t('Select all markers'),
+        category: segmentsAndCutpointsCategory,
+      },
+      selectSegmentsByLabel: {
+        name: t('Select segments by label'),
+        category: segmentsAndCutpointsCategory,
+      },
+      selectSegmentsByExpr: {
+        name: t('Select segments by expression'),
+        category: segmentsAndCutpointsCategory,
+      },
+      labelSelectedSegments: {
+        name: t('Label selected segments'),
         category: segmentsAndCutpointsCategory,
       },
       invertSelectedSegments: {
@@ -433,6 +529,10 @@ const KeyboardShortcuts = memo(({
       },
       removeSelectedSegments: {
         name: t('Remove selected segments'),
+        category: segmentsAndCutpointsCategory,
+      },
+      mutateSegmentsByExpr: {
+        name: t('Edit segments by expression'),
         category: segmentsAndCutpointsCategory,
       },
 
@@ -481,6 +581,14 @@ const KeyboardShortcuts = memo(({
         name: t('Set current frame as cover art'),
         category: outputCategory,
       },
+      captureSnapshotToClipboard: {
+        name: t('Capture snapshot to clipboard'),
+        category: outputCategory,
+      },
+      exportYouTube: {
+        name: t('Start times as YouTube Chapters'),
+        category: outputCategory,
+      },
       extractCurrentSegmentFramesAsImages: {
         name: t('Extract frames from current segment as image files'),
         category: outputCategory,
@@ -503,6 +611,10 @@ const KeyboardShortcuts = memo(({
       },
       fixInvalidDuration: {
         name: t('Fix incorrect duration'),
+        category: outputCategory,
+      },
+      decimate: {
+        name: t('Decimate video'),
         category: outputCategory,
       },
 
@@ -549,8 +661,24 @@ const KeyboardShortcuts = memo(({
         name: t('Keep or discard audio tracks'),
         category: otherCategory,
       },
+      toggleStripVideo: {
+        name: t('Keep or discard video tracks'),
+        category: otherCategory,
+      },
+      toggleStripSubtitle: {
+        name: t('Keep or discard subtitle tracks'),
+        category: otherCategory,
+      },
       toggleStripThumbnail: {
         name: t('Keep or discard thumbnail tracks'),
+        category: otherCategory,
+      },
+      toggleStripAll: {
+        name: t('Keep or discard all tracks'),
+        category: otherCategory,
+      },
+      toggleStripCurrentFilter: {
+        name: t('Toggle tracks using current filter'),
         category: otherCategory,
       },
       increaseRotation: {
@@ -577,6 +705,10 @@ const KeyboardShortcuts = memo(({
         name: t('Show waveform'),
         category: otherCategory,
       },
+      generateOverviewWaveform: {
+        name: t('Load overview'),
+        category: otherCategory,
+      },
       toggleShowThumbnails: {
         name: t('Show thumbnails'),
         category: otherCategory,
@@ -585,12 +717,20 @@ const KeyboardShortcuts = memo(({
         name: t('Show keyframes'),
         category: otherCategory,
       },
+      readAllKeyframes: {
+        name: t('Read all keyframes'),
+        category: otherCategory,
+      },
       toggleFullscreenVideo: {
         name: 'Toggle full screen video',
         category: otherCategory,
       },
       toggleSettings: {
         name: t('Settings'),
+        category: otherCategory,
+      },
+      toggleDarkMode: {
+        name: t('Toggle dark mode'),
         category: otherCategory,
       },
       openSendReportDialog: {
@@ -603,14 +743,6 @@ const KeyboardShortcuts = memo(({
       },
       openDirDialog: {
         name: t('Open folder'),
-        category: otherCategory,
-      },
-      exportYouTube: {
-        name: t('Start times as YouTube Chapters'),
-        category: otherCategory,
-      },
-      closeActiveScreen: {
-        name: t('Close current screen'),
         category: otherCategory,
       },
       closeCurrentFile: {
@@ -627,18 +759,25 @@ const KeyboardShortcuts = memo(({
     const extraLinesPerCategory: Record<Category, ReactNode> = {
       [zoomOperationsCategory]: [
         <div key="1" style={{ ...rowStyle, alignItems: 'center' }}>
-          <span>{t('Zoom in/out timeline')}</span>
+          <span>{t('Pan timeline')}</span>
           <div style={{ flexGrow: 1 }} />
           <FaMouse style={{ marginRight: '.3em' }} />
           <span>{t('Mouse scroll/wheel up/down')}</span>
         </div>,
 
-        <div key="2" style={{ ...rowStyle, alignItems: 'center' }}>
-          <span>{t('Pan timeline')}</span>
+        <WheelModifier key="2" text={t('Seek one frame')} wheelText={t('Mouse scroll/wheel up/down')} modifier={mouseWheelFrameSeekModifierKey} />,
+
+        <WheelModifier key="3" text={t('Seek one key frame')} wheelText={t('Mouse scroll/wheel up/down')} modifier={mouseWheelKeyframeSeekModifierKey} />,
+
+        <WheelModifier key="4" text={t('Zoom in/out timeline')} wheelText={t('Mouse scroll/wheel up/down')} modifier={mouseWheelZoomModifierKey} />,
+      ],
+      [segmentsAndCutpointsCategory]: [
+        <div key="1" style={{ ...rowStyle, alignItems: 'center' }}>
+          <span>{t('Manipulate segments on timeline')}</span>
           <div style={{ flexGrow: 1 }} />
-          {getModifier(mouseWheelZoomModifierKey).map((v) => <kbd key={v} style={{ marginRight: '.7em' }}>{v}</kbd>)}
+          <kbd style={{ marginRight: '.7em' }}>{getModifier(segmentMouseModifierKey)}</kbd>
           <FaMouse style={{ marginRight: '.3em' }} />
-          <span>{t('Mouse scroll/wheel up/down')}</span>
+          <span>{t('Mouse click and drag')}</span>
         </div>,
       ],
     };
@@ -647,7 +786,11 @@ const KeyboardShortcuts = memo(({
       extraLinesPerCategory,
       actionsMap,
     };
-  }, [currentCutSeg, mouseWheelZoomModifierKey, t]);
+  }, [currentCutSeg, mouseWheelFrameSeekModifierKey, mouseWheelKeyframeSeekModifierKey, mouseWheelZoomModifierKey, segmentMouseModifierKey, t]);
+
+  useEffect(() => {
+    updateKeyboardLayout();
+  }, [updateKeyboardLayout]);
 
   useEffect(() => {
     // cleanup invalid bindings, to prevent renamed actions from blocking user to rebind
@@ -668,33 +811,33 @@ const KeyboardShortcuts = memo(({
     searchInputRef.current?.focus();
   }, []);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const actionEntries = useMemo(() => (Object.entries(actionsMap) as any as [keyof typeof actionsMap, typeof actionsMap[keyof typeof actionsMap]][]).filter(([, { name, category }]) => {
-    const searchQueryTrimmed = searchQuery.toLowerCase().trim();
-    return (
-      !searchQuery
-      || name.toLowerCase().includes(searchQueryTrimmed)
-      || (category != null && category.toLowerCase().includes(searchQueryTrimmed))
-    );
-  }), [actionsMap, searchQuery]);
+  const searchQueryTrimmed = searchQuery.toLowerCase().trim();
+  const isSearching = !!searchQueryTrimmed;
+
+  const actionEntries = useMemo(() => (Object.entries(actionsMap) as unknown as [keyof typeof actionsMap, typeof actionsMap[keyof typeof actionsMap]][]).filter(([key, { name, category }]) => (
+    !isSearching
+    || key.toLocaleLowerCase().includes(searchQueryTrimmed)
+    || name.toLowerCase().includes(searchQueryTrimmed)
+    || (category != null && category.toLowerCase().includes(searchQueryTrimmed))
+  )), [actionsMap, isSearching, searchQueryTrimmed]);
 
   const categoriesWithActions = useMemo(() => Object.entries(groupBy(actionEntries, ([, { category }]) => category)), [actionEntries]);
 
-  const onDeleteBindingClick = useCallback(({ action, keys }) => {
-    // eslint-disable-next-line no-alert
-    if (!window.confirm(t('Are you sure?'))) return;
+  const onDeleteBindingClick = useCallback(async ({ action, keys }: { action: KeyboardAction, keys: string }) => {
+    if (!(await confirmDialog({ description: t('Are you sure?') }))) return;
 
-    console.log('delete key binding', action, keys);
+    console.log('Delete key binding', action, keys);
     setKeyBindings((existingBindings) => existingBindings.filter((existingBinding) => !(existingBinding.keys === keys && existingBinding.action === action)));
-  }, [setKeyBindings, t]);
+  }, [confirmDialog, setKeyBindings, t]);
 
 
-  const onResetClick = useCallback(() => {
-    // eslint-disable-next-line no-alert
-    if (!window.confirm(t('Are you sure?'))) return;
+  const onResetClick = useCallback(async () => {
+    // Double confirmation!
+    if (!(await confirmDialog({ description: t('Are you sure you want to reset all keyboard bindings?') }))) return;
+    if (!(await confirmDialog({ description: t('Are you sure you want to reset all keyboard bindings?') }))) return;
 
     resetKeyBindings();
-  }, [resetKeyBindings, t]);
+  }, [confirmDialog, resetKeyBindings, t]);
 
   const onAddBindingClick = useCallback((action: KeyboardAction) => {
     setCreatingBinding(action);
@@ -702,31 +845,35 @@ const KeyboardShortcuts = memo(({
 
   const stringifyKeys = (keys: string[]) => keys.join('+');
 
-  const onNewKeyBindingConfirmed = useCallback((action: KeyboardAction, keys: string[]) => {
-    const fixedKeys = fixKeys(keys);
-    if (fixedKeys.length === 0) return;
-    const keysStr = stringifyKeys(fixedKeys);
-    console.log('new key binding', action, keysStr);
+  const onNewKeyBindingConfirmed = useCallback(async (action: KeyboardAction, keys: string[]) => {
+    const keysStr = stringifyKeys(keys);
+    console.log('New key binding', action, keysStr);
+
+    const duplicate = keyBindings.find((existingBinding) => existingBinding.keys === keysStr);
+    let shouldReplaceDuplicate: KeyBinding | undefined;
+    if (duplicate) {
+      const isConfirmed = await confirmDialog({ confirmButtonText: t('Replace'), description: t('Combination is already bound to "{{alreadyBoundKey}}". Do you want to replace the existing binding?', { alreadyBoundKey: actionsMap[duplicate.action]?.name }) });
+
+      if (isConfirmed) {
+        shouldReplaceDuplicate = duplicate;
+      } else {
+        return;
+      }
+    }
 
     setKeyBindings((existingBindings) => {
-      const duplicate = existingBindings.find((existingBinding) => existingBinding.keys === keysStr);
-      if (duplicate) {
-        Swal.fire({ icon: 'error', title: t('Duplicate keyboard combination'), text: t('Combination is already bound to "{{alreadyBoundKey}}"', { alreadyBoundKey: actionsMap[duplicate.action]?.name }) });
-        console.log('trying to add duplicate');
-        return existingBindings;
-      }
-
-      console.log('saving key binding');
+      console.log('Saving key binding');
       setCreatingBinding(undefined);
-      return [...existingBindings, { action, keys: keysStr }];
+      const filtered = !shouldReplaceDuplicate ? existingBindings : existingBindings.filter((existing) => existing.keys !== shouldReplaceDuplicate.keys);
+      return [...filtered, { action, keys: keysStr }];
     });
-  }, [actionsMap, setKeyBindings, t]);
+  }, [actionsMap, confirmDialog, keyBindings, setKeyBindings, t]);
 
   return (
     <>
       <div style={{ marginBottom: '1em' }}>
         <div style={{ marginBottom: '1em' }}>
-          <SearchInput ref={searchInputRef} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search" width="100%" />
+          <TextInput ref={searchInputRef} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search" style={{ width: '100%', padding: '.4em .8em', boxSizing: 'border-box' }} />
         </div>
 
         {categoriesWithActions.map(([category, actionsInCategory]) => (
@@ -744,7 +891,7 @@ const KeyboardShortcuts = memo(({
                   <div>
                     {beforeContent}
                     <span title={action} style={{ marginRight: '.5em', opacity: 0.9 }}>{actionName}</span>
-                    <div style={{ fontSize: '.8em', opacity: 0.3 }} title={t('API action name: {{action}}', { action })}>{action}</div>
+                    <div style={{ fontSize: '.8em', opacity: 0.3 }} title={t('API action name: {{action}}', { action })}>{action} <Button onClick={() => onTriggerActionClick(action)}><FaHammer /></Button></div>
                   </div>
 
                   <div style={{ flexGrow: 1 }} />
@@ -752,16 +899,16 @@ const KeyboardShortcuts = memo(({
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
                     {bindingsForThisAction.map(({ keys }) => (
                       <div key={keys} style={{ display: 'flex', alignItems: 'center' }}>
-                        {renderKeys(keys.split('+'))}
+                        {renderKeys(splitKeyboardKeys(keys))}
 
-                        <IconButton title={t('Remove key binding')} appearance="minimal" intent="danger" icon={DeleteIcon} onClick={() => onDeleteBindingClick({ action, keys })} />
+                        <Button title={t('Remove key binding')} onClick={() => onDeleteBindingClick({ action, keys })} style={{ marginLeft: '.9em' }}><FaTrash style={{ fontSize: '.8em', verticalAlign: 'middle' }} /></Button>
                       </div>
                     ))}
 
                     {bindingsForThisAction.length === 0 && <span style={{ opacity: 0.8, fontSize: '.8em' }}>{t('No binding')}</span>}
                   </div>
 
-                  <IconButton title={t('Bind new key to action')} appearance="minimal" intent="success" icon={AddIcon} onClick={() => onAddBindingClick(action)} />
+                  <Button title={t('Bind new key to action')} onClick={() => onAddBindingClick(action)} style={{ marginLeft: '.5em' }}><FaPlus style={{ fontSize: '.8em', verticalAlign: 'middle' }} /></Button>
                 </div>
               );
             })}
@@ -771,7 +918,7 @@ const KeyboardShortcuts = memo(({
         ))}
       </div>
 
-      <Button intent="danger" onClick={onResetClick}>{t('Reset')}</Button>
+      {!isSearching && <Button onClick={onResetClick} style={{ marginBottom: '1em' }}><FaUndo style={{ marginRight: '.3em', verticalAlign: 'middle', padding: '.5em' }} />{t('Reset')}</Button>}
 
       <CreateBinding actionsMap={actionsMap} action={creatingBinding} setCreatingBinding={setCreatingBinding} onNewKeyBindingConfirmed={onNewKeyBindingConfirmed} />
     </>
@@ -779,20 +926,37 @@ const KeyboardShortcuts = memo(({
 });
 
 function KeyboardShortcutsDialog({
-  isShown, onHide, keyBindings, setKeyBindings, resetKeyBindings, currentCutSeg,
+  isShown, onHide, keyBindings, setKeyBindings, resetKeyBindings, currentCutSeg, getKeyboardAction,
 }: {
-  isShown: boolean, onHide: () => void, keyBindings: KeyBinding[], setKeyBindings: Dispatch<SetStateAction<KeyBinding[]>>, resetKeyBindings: () => void, currentCutSeg: StateSegment,
+  isShown: boolean,
+  onHide: () => void,
+  keyBindings: KeyBinding[],
+  setKeyBindings: Dispatch<SetStateAction<KeyBinding[]>>,
+  resetKeyBindings: () => void,
+  currentCutSeg: StateSegment | undefined,
+  getKeyboardAction: (action: KeyboardAction) => () => void,
 }) {
   const { t } = useTranslation();
 
+  const handleTriggerActionClick = useCallback((action: KeyboardAction) => {
+    onHide();
+    getKeyboardAction(action)();
+  }, [getKeyboardAction, onHide]);
+
+
   return (
-    <Sheet visible={isShown} onClosePress={onHide} maxWidth="40em" style={{ padding: '0 2em' }}>
-      <h2>{t('Keyboard & mouse shortcuts')}</h2>
+    <Dialog.Root open={isShown} onOpenChange={(v) => v === false && onHide()}>
+      <Dialog.Portal>
+        <Dialog.Overlay />
+        <Dialog.Content style={{ width: '40em' }} aria-describedby={undefined}>
+          <Dialog.Title>{t('Keyboard & mouse shortcuts')}</Dialog.Title>
 
-      <KeyboardShortcuts keyBindings={keyBindings} setKeyBindings={setKeyBindings} currentCutSeg={currentCutSeg} resetKeyBindings={resetKeyBindings} />
-      <Button onClick={onHide}>{t('Done')}</Button>
+          <KeyboardShortcuts keyBindings={keyBindings} setKeyBindings={setKeyBindings} currentCutSeg={currentCutSeg} resetKeyBindings={resetKeyBindings} onTriggerActionClick={handleTriggerActionClick} />
 
-    </Sheet>
+          <Dialog.CloseButton />
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 

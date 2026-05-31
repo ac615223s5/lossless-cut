@@ -1,9 +1,11 @@
+import type { BrowserWindow, MenuItem, MenuItemConstructorOptions } from 'electron';
 // eslint-disable-next-line import/no-extraneous-dependencies
-import electron, { BrowserWindow, MenuItem, MenuItemConstructorOptions } from 'electron';
+import electron from 'electron';
 import { t } from 'i18next';
 
-import { homepage, getReleaseUrl, licensesPage } from './constants.js';
+import { homepageUrl, getReleaseUrl, licensesUrl, thanksUrl, usageUrl, faqUrl, troubleshootingUrl, featureRequestUrl } from '../common/constants.js';
 import { logFilePath } from './logger.js';
+import { getConfigPath } from './configStore.js';
 
 
 // menu-safe i18n.t:
@@ -35,6 +37,13 @@ export default ({ app, mainWindow, newVersion, isStoreBuild }: {
             mainWindow.webContents.send('openDirDialog');
           },
         },
+        {
+          label: esc(t('Open URL')),
+          async click() {
+            mainWindow.webContents.send('promptDownloadMediaUrl');
+          },
+        },
+        { type: 'separator' },
         {
           label: esc(t('Close')),
           accelerator: 'CmdOrCtrl+W',
@@ -83,9 +92,9 @@ export default ({ app, mainWindow, newVersion, isStoreBuild }: {
               },
             },
             {
-              label: esc(t('EDL (MPlayer)')),
+              label: esc(t('EDL')),
               click() {
-                mainWindow.webContents.send('importEdlFile', 'mplayer');
+                mainWindow.webContents.send('importEdlFile', 'edl');
               },
             },
             {
@@ -128,6 +137,12 @@ export default ({ app, mainWindow, newVersion, isStoreBuild }: {
               label: esc(t('DV Analyzer Summary.txt')),
               click() {
                 mainWindow.webContents.send('importEdlFile', 'dv-analyzer-summary-txt');
+              },
+            },
+            {
+              label: esc(t('OpenTimelineIO')),
+              click() {
+                mainWindow.webContents.send('importEdlFile', 'otio');
               },
             },
           ],
@@ -184,6 +199,12 @@ export default ({ app, mainWindow, newVersion, isStoreBuild }: {
           label: esc(t('Fix incorrect duration')),
           click() {
             mainWindow.webContents.send('fixInvalidDuration');
+          },
+        },
+        {
+          label: esc(t('Decimate video')),
+          click() {
+            mainWindow.webContents.send('decimate');
           },
         },
         { type: 'separator' },
@@ -256,6 +277,12 @@ export default ({ app, mainWindow, newVersion, isStoreBuild }: {
           label: esc(t('Create fixed duration segments')),
           click() {
             mainWindow.webContents.send('createFixedDurationSegments');
+          },
+        },
+        {
+          label: esc(t('Create byte sized segments')),
+          click() {
+            mainWindow.webContents.send('createFixedByteSizedSegments');
           },
         },
         {
@@ -342,6 +369,10 @@ export default ({ app, mainWindow, newVersion, isStoreBuild }: {
     {
       label: esc(t('View')),
       submenu: [
+        ...(process.platform === 'win32' ? [
+          { role: 'minimize' as const, label: esc(t('Minimize')) },
+          { role: 'zoom' as const, label: esc(t('Maximize')) },
+        ] : []),
         { role: 'togglefullscreen', label: esc(t('Toggle Full Screen')) },
         { role: 'resetZoom', label: esc(t('Reset font size')) },
         { role: 'zoomIn', label: esc(t('Increase font size')) },
@@ -350,13 +381,9 @@ export default ({ app, mainWindow, newVersion, isStoreBuild }: {
     },
 
     // On Windows the windowMenu has a close Ctrl+W which clashes with File->Close shortcut
-    ...(process.platform === 'darwin'
-      ? [{ role: 'windowMenu' as const, label: esc(t('Window')) }]
-      : [{
-        label: esc(t('Window')),
-        submenu: [{ role: 'minimize' as const, label: esc(t('Minimize')) }],
-      }]
-    ),
+    // Also, Windows apps don't normally have a Window menu.
+    // https://github.com/mifi/lossless-cut/discussions/2409
+    ...(process.platform === 'darwin' ? [{ role: 'windowMenu' as const, label: esc(t('Window')) }] : []),
 
     {
       label: esc(t('Tools')),
@@ -392,6 +419,12 @@ export default ({ app, mainWindow, newVersion, isStoreBuild }: {
           },
         },
         {
+          label: esc(t('Read all keyframes')),
+          click() {
+            mainWindow.webContents.send('readAllKeyframes');
+          },
+        },
+        {
           label: esc(t('Create segments from keyframes')),
           click() {
             mainWindow.webContents.send('createSegmentsFromKeyframes');
@@ -411,15 +444,15 @@ export default ({ app, mainWindow, newVersion, isStoreBuild }: {
       submenu: [
         {
           label: esc(t('How to use')),
-          click() { electron.shell.openExternal('https://mifi.no/losslesscut/usage'); },
+          click() { electron.shell.openExternal(usageUrl); },
         },
         {
           label: esc(t('FAQ')),
-          click() { electron.shell.openExternal('https://mifi.no/losslesscut/faq'); },
+          click() { electron.shell.openExternal(faqUrl); },
         },
         {
           label: esc(t('Troubleshooting')),
-          click() { electron.shell.openExternal('https://mifi.no/losslesscut/troubleshooting'); },
+          click() { electron.shell.openExternal(troubleshootingUrl); },
         },
         {
           label: esc(t('Keyboard & mouse shortcuts')),
@@ -429,7 +462,7 @@ export default ({ app, mainWindow, newVersion, isStoreBuild }: {
         },
         {
           label: esc(t('Learn More')),
-          click() { electron.shell.openExternal(homepage); },
+          click() { electron.shell.openExternal(homepageUrl); },
         },
         { type: 'separator' },
         {
@@ -438,9 +471,17 @@ export default ({ app, mainWindow, newVersion, isStoreBuild }: {
         },
         {
           label: esc(t('Feature request')),
-          click() { electron.shell.openExternal('https://github.com/mifi/lossless-cut/issues'); },
+          click() { electron.shell.openExternal(featureRequestUrl); },
         },
+        ...(!isStoreBuild ? [{
+          label: esc(`${t('Donate')} ❤️`),
+          click() { electron.shell.openExternal(thanksUrl); },
+        }] : []),
         { type: 'separator' },
+        {
+          label: esc(t('Configuration file')),
+          click() { electron.shell.showItemInFolder(getConfigPath()); },
+        },
         {
           label: esc(t('Log file')),
           click() { electron.shell.openPath(logFilePath); },
@@ -448,7 +489,7 @@ export default ({ app, mainWindow, newVersion, isStoreBuild }: {
         { type: 'separator' },
         {
           label: esc(t('Licenses')),
-          click() { electron.shell.openExternal(licensesPage); },
+          click() { electron.shell.openExternal(licensesUrl); },
         },
         ...(process.platform !== 'darwin' ? [{ role: 'about' as const, label: esc(t('About LosslessCut')) }] : []),
       ],

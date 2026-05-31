@@ -1,13 +1,20 @@
 import { memo } from 'react';
-import { motion } from 'framer-motion';
+import { motion } from 'motion/react';
 import { FaTrashAlt, FaSave } from 'react-icons/fa';
 
-import { mySpring } from './animations';
 import { saveColor } from './colors';
+import useUserSettings from './hooks/useUserSettings';
 
 
-function BetweenSegments({ start, end, duration, invertCutSegments }: { start: number, end: number, duration: number, invertCutSegments: boolean }) {
-  const left = `${(start / duration) * 100}%`;
+function BetweenSegments({ start, end, fileDurationNonZero, invertCutSegments }: {
+  start: number,
+  end: number,
+  fileDurationNonZero: number,
+  invertCutSegments: boolean,
+}) {
+  const left = `${(start / fileDurationNonZero) * 100}%`;
+
+  const { effectiveExportMode, prefersReducedMotion, springAnimation } = useUserSettings();
 
   return (
     <motion.div
@@ -25,18 +32,23 @@ function BetweenSegments({ start, end, duration, invertCutSegments }: { start: n
       }}
       animate={{
         left,
-        width: `${((end - start) / duration) * 100}%`,
+        width: `${((end - start) / fileDurationNonZero) * 100}%`,
       }}
-      layout
-      transition={mySpring}
+      layout={!prefersReducedMotion}
+      transition={springAnimation}
     >
-      <div style={{ flexGrow: 1, borderBottom: '1px dashed var(--gray10)', marginLeft: 5, marginRight: 5 }} />
-      {invertCutSegments ? (
-        <FaSave style={{ color: saveColor }} size={16} />
-      ) : (
-        <FaTrashAlt style={{ color: 'var(--gray10)' }} size={16} />
+      <div style={{ flexGrow: 1, borderBottom: '1px dashed var(--gray-10)', marginLeft: 5, marginRight: 5 }} />
+      {/* https://github.com/mifi/lossless-cut/issues/2157 */}
+      {effectiveExportMode !== 'segments_to_chapters' && (
+        <>
+          {invertCutSegments ? (
+            <FaSave style={{ color: saveColor }} />
+          ) : (
+            <FaTrashAlt style={{ color: 'var(--gray-10)' }} />
+          )}
+          <div style={{ flexGrow: 1, borderBottom: '1px dashed var(--gray-10)', marginLeft: 5, marginRight: 5 }} />
+        </>
       )}
-      <div style={{ flexGrow: 1, borderBottom: '1px dashed var(--gray10)', marginLeft: 5, marginRight: 5 }} />
     </motion.div>
   );
 }

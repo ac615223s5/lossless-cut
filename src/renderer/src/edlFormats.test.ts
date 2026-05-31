@@ -1,16 +1,10 @@
-import fs from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { it, describe, expect } from 'vitest';
+import { it, describe, expect, test } from 'vitest';
 
+import type { Otio } from './edlFormats';
+import { parseSrtToSegments, formatSrt, parseYouTube, formatYouTube, parseMplayerEdl, parseXmeml, parseFcpXml, parseCsv, parseCsvTime, getFrameValParser, formatCsvFrames, getFrameCountRaw, parsePbf, parseDvAnalyzerSummaryTxt, parseCutlist, parseDjiGps1, parseOtio, parseDjiGps2 } from './edlFormats';
+import { readFixture, readFixtureBinary } from './test/util';
+import otioFixture from './test/fixtures/otio';
 
-import { parseSrt, formatSrt, parseYouTube, formatYouTube, parseMplayerEdl, parseXmeml, parseFcpXml, parseCsv, parseCsvTime, getFrameValParser, formatCsvFrames, getFrameCountRaw, parsePbf, parseDvAnalyzerSummaryTxt, parseCutlist } from './edlFormats';
-
-// eslint-disable-next-line no-underscore-dangle
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-const readFixture = async (name: string, encoding: BufferEncoding = 'utf8') => fs.readFile(join(__dirname, 'fixtures', name), encoding);
-const readFixtureBinary = async (name: string) => fs.readFile(join(__dirname, 'fixtures', name), null);
 
 const expectYouTube1 = [
   { start: 0, end: 1, name: '00:01 Test 1' },
@@ -71,20 +65,30 @@ describe('parseYouTube', () => {
       { start: 0, end: undefined, name: 'Test 1' },
     ]);
   });
+
+  // possibly https://github.com/mifi/lossless-cut/issues/2344
+  it('Windows crlf', () => {
+    const str = ' 00:00: Test 1\r\n00:01: Test 2';
+    const edl = parseYouTube(str);
+    expect(edl).toEqual([
+      { start: 0, end: 1, name: 'Test 1' },
+      { start: 1, end: undefined, name: 'Test 2' },
+    ]);
+  });
 });
 
 it('formatYouTube', () => {
   expect(formatYouTube([
-    { start: 1, end: 2, name: 'Label 🎉' },
-    { start: 3, end: 5 },
-    { start: 10000, end: 10001, name: '' },
+    { start: 1, name: 'Label 🎉' },
+    { start: 3 },
+    { start: 10000, name: '' },
   ]).split('\n')).toEqual([
     '0:01 Label 🎉',
     '0:03',
     '2:46:40',
   ]);
   expect(formatYouTube([
-    { start: 0, end: 100 },
+    { start: 0 },
   ]).split('\n')).toEqual([
     '0:00',
   ]);
@@ -177,21 +181,21 @@ it('parseMplayerEdl, starting at 0', async () => {
 });
 
 it('parses xmeml 1', async () => {
-  expect(await parseXmeml(await readFixture('Final Cut Pro XMEML.xml'))).toMatchSnapshot();
+  expect(parseXmeml(await readFixture('Final Cut Pro XMEML.xml'))).toMatchSnapshot();
 });
 
 it('parses xmeml 2', async () => {
-  expect(await parseXmeml(await readFixture('Final Cut Pro XMEML 2.xml'))).toMatchSnapshot();
+  expect(parseXmeml(await readFixture('Final Cut Pro XMEML 2.xml'))).toMatchSnapshot();
 });
 
 // see https://github.com/mifi/lossless-cut/issues/1195
 it('parses xmeml - with multiple tracks', async () => {
-  expect(await parseXmeml(await readFixture('Final Cut Pro XMEML 3.xml'))).toMatchSnapshot();
+  expect(parseXmeml(await readFixture('Final Cut Pro XMEML 3.xml'))).toMatchSnapshot();
 });
 
 // see https://github.com/mifi/lossless-cut/issues/1195
 it('parses fcpxml 1.9', async () => {
-  expect(await parseFcpXml(await readFixture('FCPXML_1_9.fcpxml'))).toMatchSnapshot();
+  expect(parseFcpXml(await readFixture('FCPXML_1_9.fcpxml'))).toMatchSnapshot();
 });
 
 // https://github.com/mifi/lossless-cut/issues/1024
@@ -202,9 +206,9 @@ const csvFramesStr = `\
 688,747,EP106_SQ020_SH0010
 `;
 
-it('parses csv with frames', async () => {
+it('parses csv with frames', () => {
   const fps = 30;
-  const parsed = await parseCsv(csvFramesStr, getFrameValParser(fps));
+  const parsed = parseCsv(csvFramesStr, getFrameValParser(fps));
 
   expect(parsed).toEqual([
     { end: 5.166666666666667, name: 'EP106_SQ010_SH0010', start: 0 },
@@ -213,11 +217,11 @@ it('parses csv with frames', async () => {
     { end: 24.9, name: 'EP106_SQ020_SH0010', start: 22.933333333333334 },
   ]);
 
-  const formatted = await formatCsvFrames({
+  const formatted = formatCsvFrames({
     cutSegments: parsed,
     getFrameCount: (sec) => getFrameCountRaw(fps, sec),
   });
-  expect(formatted).toEqual(csvFramesStr);
+  expect(formatted).toEqual(`${['Start', 'End', 'Name'].join(',')}\n${csvFramesStr}`);
 });
 
 const csvTimestampStr = `\
@@ -229,8 +233,8 @@ const csvTimestampStr = `\
 0:2,0:3,F
 `;
 
-it('parses csv with timestamps', async () => {
-  const parsed = await parseCsv(csvTimestampStr, parseCsvTime);
+it('parses csv with timestamps', () => {
+  const parsed = parseCsv(csvTimestampStr, parseCsvTime);
 
   expect(parsed).toEqual([
     { end: 189.053, name: 'A', start: 114.612 },
@@ -239,6 +243,50 @@ it('parses csv with timestamps', async () => {
     { end: 1, name: 'D', start: 0 },
     { end: 1.99, name: 'E', start: 1.01 },
     { start: 2, name: 'F', end: 3 },
+  ]);
+});
+
+it('parses csv with 2 columns (no name)', () => {
+  const parsed = parseCsv('1,2\n3,4\n', parseCsvTime);
+
+  expect(parsed).toEqual([
+    { start: 1, end: 2 },
+    { start: 3, end: 4 },
+  ]);
+});
+
+it('parses csv with 1 column (markers)', () => {
+  const parsed = parseCsv('1\n2\n3\n', parseCsvTime);
+  expect(parsed).toEqual([
+    { start: 1 },
+    { start: 2 },
+    { start: 3 },
+  ]);
+});
+
+const csvWithTagsHeader = 'Start,End,Name,group,Name';
+const csvWithTags = `\
+1,2,Name1,group1,This is a tag which is also called Name
+3,4,Name2,,Name
+5,6,Name3,"Group 2",`;
+
+it('parses csv with tags', () => {
+  const csv = `${csvWithTagsHeader}\n${csvWithTags}\n`;
+
+  const parsed = parseCsv(csv, parseCsvTime);
+  expect(parsed).toEqual([
+    { start: 1, end: 2, name: 'Name1', tags: { group: 'group1', Name: 'This is a tag which is also called Name' } },
+    { start: 3, end: 4, name: 'Name2', tags: { Name: 'Name' } },
+    { start: 5, end: 6, name: 'Name3', tags: { group: 'Group 2' } },
+  ]);
+});
+
+it('parses csv with tags but no header', () => {
+  const parsed = parseCsv(csvWithTags, parseCsvTime);
+  expect(parsed).toEqual([
+    { start: 1, end: 2, name: 'Name1', tags: { tag1: 'group1', tag2: 'This is a tag which is also called Name' } },
+    { start: 3, end: 4, name: 'Name2', tags: { tag2: 'Name' } },
+    { start: 5, end: 6, name: 'Name3', tags: { tag1: 'Group 2' } },
   ]);
 });
 
@@ -306,14 +354,33 @@ it('parses pbf', async () => {
 });
 
 it('parses srt', async () => {
-  expect(parseSrt(await readFixture('sample.srt'))).toMatchSnapshot();
+  expect(parseSrtToSegments(await readFixture('sample.srt'))).toMatchSnapshot();
 });
 
 it('format srt', async () => {
-  expect(formatSrt(parseSrt(await readFixture('sample.srt')))).toMatchSnapshot();
+  expect(formatSrt(parseSrtToSegments(await readFixture('sample.srt')))).toMatchSnapshot();
 });
 
 // https://github.com/mifi/lossless-cut/issues/1664
 it('parses DV Analyzer Summary.txt', async () => {
   expect(parseDvAnalyzerSummaryTxt(await readFixture('DV Analyzer Summary.txt', 'utf8'))).toMatchSnapshot();
+});
+
+test('parseDjiGps1', () => {
+  expect(parseDjiGps1(['F/2.8, SS 776.89, ISO 100, EV -1.0, GPS (15.0732, 67.9771, 19), D 67.78m, H 20.30m, H.S 1.03m/s, V.S 0.00m/s'])).toMatchSnapshot();
+  // https://github.com/mifi/lossless-cut/issues/2072#issuecomment-2325755148
+  expect(parseDjiGps1(['F/2.8, SS 678.52, ISO 100, EV 0, DZOOM 1.000, GPS (-3.9130, 56.5019, 26), D 0.57m, H 102.40m, H.S 0.00m/s, V.S -0.00m/s'])).toMatchSnapshot();
+});
+
+test('parseDjiGps2', () => {
+  // SRT format DJI Air 3
+  expect(parseDjiGps2([
+    '<font size="28">FrameCnt: 446, DiffTime: 34ms',
+    '2025-09-15 14:35:09.229',
+    '[iso: 120] [shutter: 1/3388.79] [fnum: 1.7] [ev: 0] [color_md : default] [focal_len: 24.00] [latitude: 62.229033] [longitude: 6.552877] [rel_alt: 3.700 abs_alt: 1245.046] [ct: 5341] </font>',
+  ])).toMatchSnapshot();
+});
+
+test('otio', () => {
+  expect(parseOtio(otioFixture satisfies Otio)).toMatchSnapshot();
 });

@@ -1,114 +1,154 @@
 import JSON5 from 'json5';
 import i18n from 'i18next';
-import type { parse as CueParse } from 'cue-parser';
 import invariant from 'tiny-invariant';
+import { ZodError } from 'zod';
 
-import { parseSrt, formatSrt, parseCuesheet, parseXmeml, parseFcpXml, parseCsv, parseCutlist, parsePbf, parseMplayerEdl, formatCsvHuman, formatTsv, formatCsvFrames, formatCsvSeconds, parseCsvTime, getFrameValParser, parseDvAnalyzerSummaryTxt } from './edlFormats';
+import { parseSrtToSegments, formatSrt, parseCuesheet, parseXmeml, parseFcpXml, parseCsv, parseCutlist, parsePbf, parseEdl, formatCsvHuman, formatTsvHuman, formatCsvFrames, formatCsvSeconds, parseCsvTime, getFrameValParser, parseDvAnalyzerSummaryTxt, parseOtio } from './edlFormats';
 import { askForYouTubeInput, showOpenDialog } from './dialogs';
 import { getOutPath } from './util';
-import { EdlExportType, EdlFileType, EdlImportType, Segment, StateSegment } from './types';
+import type { EdlExportType, EdlFileType, EdlImportType, GetFrameCount, LlcProject, SegmentBase, StateSegment } from './types';
+import { llcProjectV1Schema, llcProjectV2Schema } from './types';
+import { mapSaveableSegments } from './segments';
+import isDev from './isDev';
 
 const { readFile, writeFile } = window.require('fs/promises');
-const cueParser: { parse: typeof CueParse } = window.require('cue-parser');
+const cueParser = window.require('cue-parser');
 const { basename } = window.require('path');
 
 const { dialog } = window.require('@electron/remote');
 
-export async function loadCsvSeconds(path: string) {
-  return parseCsv(await readFile(path, 'utf8'), parseCsvTime);
+
+// When readFile is used with 'utf8', ef bb bf is its UTF-8 representation of BOM. As BOM is considered white-space, it can be stripped by .trim(). Node.js does not strip BOM, it is a userland task.
+// https://github.com/nodejs/node/issues/20649#issuecomment-388016410
+const trimBom = (text: string) => text.trim();
+
+async function loadCsv(path: string, parseTimeFn: (a: string) => number | undefined) {
+  return parseCsv(trimBom(await readFile(path, 'utf8')), parseTimeFn);
 }
 
-export async function loadCsvFrames(path: string, fps?: number) {
-  if (!fps) throw new Error('The loaded file has an unknown framerate');
-  return parseCsv(await readFile(path, 'utf8'), getFrameValParser(fps));
+async function loadCutlistSeconds(path: string) {
+  return parseCutlist(trimBom(await readFile(path, 'utf8')));
 }
 
-export async function loadCutlistSeconds(path: string) {
-  return parseCutlist(await readFile(path, 'utf8'));
-}
-
-export async function loadXmeml(path: string) {
+async function loadXmeml(path: string) {
   return parseXmeml(await readFile(path, 'utf8'));
 }
 
-export async function loadFcpXml(path: string) {
+async function loadFcpXml(path: string) {
   return parseFcpXml(await readFile(path, 'utf8'));
 }
 
-export async function loadDvAnalyzerSummaryTxt(path: string) {
-  return parseDvAnalyzerSummaryTxt(await readFile(path, 'utf8'));
+async function loadDvAnalyzerSummaryTxt(path: string) {
+  return parseDvAnalyzerSummaryTxt(trimBom(await readFile(path, 'utf8')));
 }
 
-export async function loadPbf(path: string) {
+async function loadPbf(path: string) {
   return parsePbf(await readFile(path));
 }
 
-export async function loadMplayerEdl(path: string) {
-  return parseMplayerEdl(await readFile(path, 'utf8'));
+async function loadEdl(path: string, fps: number) {
+  return parseEdl(trimBom(await readFile(path, 'utf8')), fps);
 }
 
-export async function loadCue(path: string) {
+async function loadCue(path: string) {
   return parseCuesheet(cueParser.parse(path));
 }
 
-export async function loadSrt(path: string) {
-  return parseSrt(await readFile(path, 'utf8'));
+async function loadSrt(path: string) {
+  return parseSrtToSegments(await readFile(path, 'utf8'));
 }
 
-export async function saveCsv(path: string, cutSegments) {
-  await writeFile(path, await formatCsvSeconds(cutSegments));
+export async function saveCsv(path: string, cutSegments: SegmentBase[]) {
+  await writeFile(path, formatCsvSeconds(cutSegments));
 }
 
-export async function saveCsvHuman(path: string, cutSegments) {
-  await writeFile(path, await formatCsvHuman(cutSegments));
+export async function saveCsvHuman(path: string, cutSegments: SegmentBase[]) {
+  await writeFile(path, formatCsvHuman(cutSegments));
 }
 
-export async function saveCsvFrames({ path, cutSegments, getFrameCount }) {
-  await writeFile(path, await formatCsvFrames({ cutSegments, getFrameCount }));
+export async function saveCsvFrames({ path, cutSegments, getFrameCount }: {
+  path: string,
+  cutSegments: SegmentBase[],
+  getFrameCount: GetFrameCount,
+}) {
+  await writeFile(path, formatCsvFrames({ cutSegments, getFrameCount }));
 }
 
-export async function saveTsv(path: string, cutSegments) {
-  await writeFile(path, await formatTsv(cutSegments));
+export async function saveTsv(path: string, cutSegments: SegmentBase[]) {
+  await writeFile(path, formatTsvHuman(cutSegments));
 }
 
-export async function saveSrt(path: string, cutSegments) {
-  await writeFile(path, await formatSrt(cutSegments));
+export async function saveSrt(path: string, cutSegments: SegmentBase[]) {
+  await writeFile(path, formatSrt(cutSegments));
 }
 
-export async function saveLlcProject({ savePath, filePath, cutSegments }) {
-  const projectData = {
-    version: 1,
-    mediaFileName: basename(filePath),
-    cutSegments: cutSegments.map(({ start, end, name, tags }) => ({ start, end, name, tags })),
+export async function saveLlcProject({ savePath, mediaFilePath, cutSegments }: {
+  savePath: string,
+  mediaFilePath: string,
+  cutSegments: StateSegment[],
+}) {
+  const projectData: LlcProject = {
+    version: 2,
+    mediaFileName: basename(mediaFilePath),
+    cutSegments: mapSaveableSegments(cutSegments),
   };
   await writeFile(savePath, JSON5.stringify(projectData, null, 2));
 }
 
 export async function loadLlcProject(path: string) {
-  const parsed = JSON5.parse(await readFile(path)) as unknown;
-  if (parsed == null || typeof parsed !== 'object') throw new Error('Invalid LLC file');
-  let mediaFileName: string | undefined;
-  if ('mediaFileName' in parsed && typeof parsed.mediaFileName === 'string') {
-    mediaFileName = parsed.mediaFileName;
+  const json = JSON5.parse(await readFile(path, 'utf8'));
+
+  async function doLoad(): Promise<LlcProject> {
+    // todo probably remove migration in future
+    try {
+      return llcProjectV2Schema.parse(json);
+    } catch (err) {
+      if (err instanceof ZodError) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { cutSegments, version: _ignored, ...restProject } = llcProjectV1Schema.parse(json);
+        console.log('Converting v1 project to v2');
+        return {
+          ...restProject,
+          version: 2,
+          cutSegments: cutSegments.map(({ start, ...restSeg }) => ({
+            ...restSeg,
+            start: start ?? 0, // v1 allowed undefined for "start", which we no longer allow as of v2
+          })),
+        };
+      }
+      throw err;
+    }
   }
-  if (!('cutSegments' in parsed) || !Array.isArray(parsed.cutSegments)) throw new Error('Invalid LLC file');
-  return {
-    mediaFileName,
-    cutSegments: parsed.cutSegments as StateSegment[], // todo validate more
-  };
+
+  const project = await doLoad();
+  console.log(`Loaded LLC project v${project.version}, mediaFileName: ${project.mediaFileName}, ${project.cutSegments.length} segments`);
+  if (isDev) console.log(project);
+  return project;
 }
 
-export async function readEdlFile({ type, path, fps }: { type: EdlFileType, path: string, fps?: number | undefined }) {
-  if (type === 'csv') return loadCsvSeconds(path);
-  if (type === 'csv-frames') return loadCsvFrames(path, fps);
+export async function loadOtio(path: string) {
+  return parseOtio(JSON.parse(await readFile(path, 'utf8')));
+}
+
+export async function readEdlFile({ type, path, fps }: {
+  type: EdlFileType,
+  path: string,
+  fps: number | undefined,
+}) {
+  if (type === 'csv') return loadCsv(path, parseCsvTime);
+  if (type === 'csv-frames' || type === 'edl') {
+    invariant(fps != null, 'The loaded media has an unknown framerate');
+    if (type === 'csv-frames') return loadCsv(path, getFrameValParser(fps));
+    if (type === 'edl') return loadEdl(path, fps);
+  }
   if (type === 'cutlist') return loadCutlistSeconds(path);
   if (type === 'xmeml') return loadXmeml(path);
   if (type === 'fcpxml') return loadFcpXml(path);
   if (type === 'dv-analyzer-summary-txt') return loadDvAnalyzerSummaryTxt(path);
   if (type === 'cue') return loadCue(path);
   if (type === 'pbf') return loadPbf(path);
-  if (type === 'mplayer') return loadMplayerEdl(path);
   if (type === 'srt') return loadSrt(path);
+  if (type === 'otio') return loadOtio(path);
   if (type === 'llc') {
     const project = await loadLlcProject(path);
     return project.cutSegments;
@@ -116,8 +156,8 @@ export async function readEdlFile({ type, path, fps }: { type: EdlFileType, path
   throw new Error('Invalid EDL type');
 }
 
-export async function askForEdlImport({ type, fps }: { type: EdlImportType, fps?: number | undefined }) {
-  if (type === 'youtube') return askForYouTubeInput();
+export async function askForEdlImport({ type, fps, fileDuration }: { type: EdlImportType, fps?: number | undefined, fileDuration?: number | undefined }) {
+  if (type === 'youtube') return askForYouTubeInput({ fileDuration });
 
   let filters;
   // eslint-disable-next-line unicorn/prefer-switch
@@ -126,19 +166,27 @@ export async function askForEdlImport({ type, fps }: { type: EdlImportType, fps?
   else if (type === 'fcpxml') filters = [{ name: i18n.t('FCPXML files'), extensions: ['fcpxml'] }];
   else if (type === 'cue') filters = [{ name: i18n.t('CUE files'), extensions: ['cue'] }];
   else if (type === 'pbf') filters = [{ name: i18n.t('PBF files'), extensions: ['pbf'] }];
-  else if (type === 'mplayer') filters = [{ name: i18n.t('MPlayer EDL'), extensions: ['*'] }];
+  else if (type === 'edl') filters = [{ name: i18n.t('EDL'), extensions: ['*'] }];
   else if (type === 'dv-analyzer-summary-txt') filters = [{ name: i18n.t('DV Analyzer Summary.txt'), extensions: ['txt'] }];
   else if (type === 'srt') filters = [{ name: i18n.t('Subtitles (SRT)'), extensions: ['srt'] }];
   else if (type === 'llc') filters = [{ name: i18n.t('LosslessCut project'), extensions: ['llc'] }];
 
-  const { canceled, filePaths } = await showOpenDialog({ properties: ['openFile'], filters, title: i18n.t('Import project') });
+  const { canceled, filePaths } = await showOpenDialog({
+    properties: ['openFile'],
+    title: i18n.t('Import project'),
+    ...(filters && { filters }),
+  });
   const [firstFilePath] = filePaths;
   if (canceled || firstFilePath == null) return [];
   return readEdlFile({ type, path: firstFilePath, fps });
 }
 
 export async function exportEdlFile({ type, cutSegments, customOutDir, filePath, getFrameCount }: {
-  type: EdlExportType, cutSegments: Segment[], customOutDir?: string | undefined, filePath?: string | undefined, getFrameCount: (a: number) => number | undefined,
+  type: EdlExportType,
+  cutSegments: StateSegment[],
+  customOutDir?: string | undefined,
+  filePath?: string | undefined,
+  getFrameCount: GetFrameCount,
 }) {
   invariant(filePath != null);
 
@@ -175,6 +223,6 @@ export async function exportEdlFile({ type, cutSegments, customOutDir, filePath,
   else if (type === 'tsv-human') await saveTsv(savePath, cutSegments);
   else if (type === 'csv-human') await saveCsvHuman(savePath, cutSegments);
   else if (type === 'csv-frames') await saveCsvFrames({ path: savePath, cutSegments, getFrameCount });
-  else if (type === 'llc') await saveLlcProject({ savePath, filePath, cutSegments });
+  else if (type === 'llc') await saveLlcProject({ savePath, mediaFilePath: filePath, cutSegments });
   else if (type === 'srt') await saveSrt(savePath, cutSegments);
 }

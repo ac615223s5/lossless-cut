@@ -1,106 +1,125 @@
-import assert from 'node:assert';
+import { ExecaError } from 'execa';
 
 import logger from './logger.js';
-import { createMediaSourceProcess, readOneJpegFrame as readOneJpegFrameRaw } from './ffmpeg.js';
+import { createMediaSourceProcess } from './ffmpeg.js';
 
 
-export function createMediaSourceStream({ path, videoStreamIndex, audioStreamIndex, seekTo, size, fps }: {
-  path: string, videoStreamIndex?: number | undefined, audioStreamIndex?: number | undefined, seekTo: number, size?: number | undefined, fps?: number | undefined,
-}) {
+// eslint-disable-next-line import/prefer-default-export
+export function createMediaSourceStream(params: Parameters<typeof createMediaSourceProcess>[0]) {
   const abortController = new AbortController();
-  logger.info('Starting preview process', { videoStreamIndex, audioStreamIndex, seekTo });
-  const process = createMediaSourceProcess({ path, videoStreamIndex, audioStreamIndex, seekTo, size, fps });
 
-  // eslint-disable-next-line unicorn/prefer-add-event-listener
-  abortController.signal.onabort = () => {
-    logger.info('Aborting preview process', { videoStreamIndex, audioStreamIndex, seekTo });
-    process.kill('SIGKILL');
-  };
+  const abort = () => abortController.abort();
 
-  const { stdout } = process;
-  assert(stdout != null);
+  async function attemptCreateProcess({ forceColorspace }: { forceColorspace?: boolean } = {}) {
+    const { videoStreamIndex, audioStreamIndexes, seekTo } = params;
 
-  stdout.pause();
+    logger.info('Starting preview process', { videoStreamIndex, audioStreamIndexes, seekTo });
+    const process = createMediaSourceProcess({ ...params, forceColorspace });
 
-  const readChunk = async () => new Promise((resolve, reject) => {
-    let cleanup: () => void;
-
-    const onClose = () => {
-      cleanup();
-      resolve(null);
-    };
-    const onData = (chunk: Buffer) => {
-      stdout.pause();
-      cleanup();
-      resolve(chunk);
-    };
-    const onError = (err: Error) => {
-      cleanup();
-      reject(err);
-    };
-    cleanup = () => {
-      stdout.off('data', onData);
-      stdout.off('error', onError);
-      stdout.off('close', onClose);
+    // eslint-disable-next-line unicorn/prefer-add-event-listener
+    abortController.signal.onabort = () => {
+      logger.info('Aborting preview process', { videoStreamIndex, audioStreamIndexes, seekTo });
+      process.kill('SIGKILL');
     };
 
-    stdout.once('data', onData);
-    stdout.once('error', onError);
-    stdout.once('close', onClose);
+    const { stdout } = process;
 
-    stdout.resume();
-  });
+    logger.info('Waiting for first chunk');
 
-  function abort() {
-    abortController.abort();
-  }
+    let timeout: NodeJS.Timeout | undefined;
+    let firstChunk: Buffer | undefined;
 
-  let stderr = Buffer.alloc(0);
-  process.stderr?.on('data', (chunk) => {
-    stderr = Buffer.concat([stderr, chunk]);
-  });
-
-  (async () => {
     try {
-      await process;
+      await Promise.race([
+        new Promise<void>((resolve, reject) => {
+          stdout.once('data', (chunk) => {
+            stdout.pause();
+            firstChunk = chunk;
+            resolve();
+          });
+          timeout = setTimeout(() => {
+            reject(new Error('Timeout waiting for media source process to start outputting data'));
+          }, 10000);
+        }),
+        process,
+      ]);
     } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') {
+      process.kill('SIGKILL');
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    logger.info('First chunk received');
+
+    const readChunk = async () => new Promise<Buffer | null>((resolve, reject) => {
+      if (firstChunk) {
+        logger.info('Client read first chunk');
+        resolve(firstChunk);
+        firstChunk = undefined;
         return;
       }
 
-      // @ts-expect-error todo
-      if (!(err.killed)) {
-        // @ts-expect-error todo
-        console.warn(err.message);
-        console.warn(stderr.toString('utf8'));
-      }
-    }
-  })();
+      // eslint-disable-next-line no-shadow
+      let cleanup: () => void;
 
-  return { abort, readChunk };
-}
+      const onClose = () => {
+        cleanup();
+        resolve(null);
+      };
 
-export function readOneJpegFrame({ path, seekTo, videoStreamIndex }: { path: string, seekTo: number, videoStreamIndex: number }) {
-  const abortController = new AbortController();
-  const process = readOneJpegFrameRaw({ path, seekTo, videoStreamIndex });
+      // poor man's backpressure handling: we only read one chunk at a time
+      const onData = (chunk: Buffer) => {
+        stdout.pause();
+        cleanup();
+        resolve(chunk);
+      };
+      const onError = (err: Error) => {
+        cleanup();
+        reject(err);
+      };
+      cleanup = () => {
+        stdout.off('data', onData);
+        stdout.off('error', onError);
+        stdout.off('close', onClose);
+      };
 
-  // eslint-disable-next-line unicorn/prefer-add-event-listener
-  abortController.signal.onabort = () => process.kill('SIGKILL');
+      stdout.once('data', onData);
+      stdout.once('error', onError);
+      stdout.once('close', onClose);
 
-  function abort() {
-    abortController.abort();
+      stdout.resume();
+    });
+
+    return readChunk;
   }
 
-  const promise = (async () => {
-    try {
-      const { stdout } = await process;
-      return stdout;
-    } catch (err) {
-      // @ts-expect-error todo
-      logger.error('renderOneJpegFrame', err.shortMessage);
-      throw new Error('Failed to render JPEG frame');
-    }
-  })();
+  return {
+    abort,
+    promise: (async () => {
+      try {
+        return await attemptCreateProcess();
+      } catch (err) {
+        if (abortController.signal.aborted) {
+          return undefined;
+        }
+        if (err instanceof ExecaError && /^\[swscaler[^\]]+\]\s+Unsupported input/gm.test((err as ExecaError<{ buffer: { stdout: false, stderr: true }, encoding: 'utf8' }>).stderr)) {
+          logger.warn('Media source process failed due to unsupported colorspace, retrying with forced colorspace conversion');
 
-  return { promise, abort };
+          try {
+            return await attemptCreateProcess({ forceColorspace: true });
+          } catch (err2) {
+            if (abortController.signal.aborted) {
+              return undefined;
+            }
+            logger.warn('Media source process error', err2 instanceof Error ? err2.message : err2);
+            return undefined;
+          }
+        }
+
+        logger.warn('Media source process error', err instanceof Error ? err.message : err);
+        return undefined;
+      }
+    })(),
+  };
 }

@@ -1,10 +1,11 @@
 module.exports = {
   extends: ['mifi'],
   rules: {
-    'no-console': 0,
     'jsx-a11y/click-events-have-key-events': 0,
     'jsx-a11y/interactive-supports-focus': 0,
     'jsx-a11y/control-has-associated-label': 0,
+    'react/no-unused-prop-types': 0,
+    'func-call-spacing': 0,
   },
 
   overrides: [
@@ -15,7 +16,9 @@ module.exports = {
         browser: true,
       },
       rules: {
+        'no-console': 0,
         'import/no-extraneous-dependencies': 0,
+        'unicorn/prefer-global-this': 0,
       },
     },
     {
@@ -23,14 +26,20 @@ module.exports = {
       env: {
         browser: true,
       },
+      rules: {
+        'no-console': 0,
+        'import/no-extraneous-dependencies': 0,
+        'unicorn/prefer-global-this': 0,
+      },
     },
     {
-      files: ['./script/**/*.{js,cjs,mjs,jsx,ts,tsx,mts}', 'electron.vite.config.js'],
+      files: ['./script/**/*.{js,cjs,mjs,jsx,ts,tsx,mts}', 'electron.vite.config.ts'],
       rules: {
         'import/no-extraneous-dependencies': ['error', {
           devDependencies: true,
           optionalDependencies: false,
         }],
+        'no-console': 0,
       },
     },
   ],

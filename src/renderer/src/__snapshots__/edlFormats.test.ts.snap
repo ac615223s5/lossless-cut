@@ -12,6 +12,107 @@ Subtitle 2 line 2
 "
 `;
 
+exports[`otio 1`] = `
+[
+  {
+    "end": 4.5,
+    "name": "2004-2-汐洛定制女包专营店.mp4",
+    "start": 0,
+    "tags": {
+      "otioClip": "2",
+      "otioTrack": "1",
+    },
+  },
+  {
+    "end": 482.23333333333335,
+    "name": "2004-2-汐洛定制女包专营店.mp4",
+    "start": 66.36666666666666,
+    "tags": {
+      "otioClip": "2",
+      "otioTrack": "1",
+    },
+  },
+  {
+    "end": 66.36666666666667,
+    "name": "2004-2-汐洛定制女包专营店.mp4",
+    "start": 4.5,
+    "tags": {
+      "otioClip": "2",
+      "otioTrack": "1",
+    },
+  },
+  {
+    "end": 4.5,
+    "name": "2004-2-汐洛定制女包专营店.mp4",
+    "start": 0,
+    "tags": {
+      "otioClip": "2",
+      "otioTrack": "1",
+    },
+  },
+  {
+    "end": 482.23333333333335,
+    "name": "2004-2-汐洛定制女包专营店.mp4",
+    "start": 66.36666666666666,
+    "tags": {
+      "otioClip": "2",
+      "otioTrack": "1",
+    },
+  },
+  {
+    "end": 66.36666666666667,
+    "name": "2004-2-汐洛定制女包专营店.mp4",
+    "start": 4.5,
+    "tags": {
+      "otioClip": "2",
+      "otioTrack": "1",
+    },
+  },
+]
+`;
+
+exports[`parseDjiGps1 1`] = `
+{
+  "alt": 19,
+  "distance": 67.78,
+  "dzoom": undefined,
+  "ev": -1,
+  "f": "F/2.8",
+  "height": 20.3,
+  "horizontalSpeed": 1.03,
+  "iso": 100,
+  "lat": 67.9771,
+  "lng": 15.0732,
+  "ss": 776.89,
+  "verticalSpeed": 0,
+}
+`;
+
+exports[`parseDjiGps1 2`] = `
+{
+  "alt": 26,
+  "distance": 0.57,
+  "dzoom": 1,
+  "ev": 0,
+  "f": "F/2.8",
+  "height": 102.4,
+  "horizontalSpeed": 0,
+  "iso": 100,
+  "lat": 56.5019,
+  "lng": -3.913,
+  "ss": 678.52,
+  "verticalSpeed": -0,
+}
+`;
+
+exports[`parseDjiGps2 1`] = `
+{
+  "altitude": 1245.046,
+  "lat": 62.229033,
+  "lng": 6.552877,
+}
+`;
+
 exports[`parses DV Analyzer Summary.txt 1`] = `
 [
   {
@@ -933,24 +1034,32 @@ exports[`parses fcpxml 1.9 1`] = `
 exports[`parses pbf 1`] = `
 [
   {
-    "end": 189.053,
     "name": "label 1",
     "start": 104.612,
   },
   {
-    "end": 476.194,
+    "name": " ",
+    "start": 189.053,
+  },
+  {
     "name": "label 2",
     "start": 300.448,
   },
   {
-    "end": 704.264,
+    "name": " ",
+    "start": 476.194,
+  },
+  {
     "name": "label 3",
     "start": 567.075,
   },
   {
-    "end": 855.455,
     "name": "label 4",
     "start": 704.264,
+  },
+  {
+    "name": " ",
+    "start": 855.455,
   },
 ]
 `;
@@ -958,34 +1067,32 @@ exports[`parses pbf 1`] = `
 exports[`parses pbf 2`] = `
 [
   {
-    "end": 189.053,
     "name": "label 1",
     "start": 104.612,
   },
   {
-    "end": 300.448,
     "name": "label 2",
     "start": 189.053,
   },
   {
-    "end": 476.194,
     "name": "label 3",
     "start": 300.448,
   },
   {
-    "end": 567.075,
     "name": "label 4",
     "start": 476.194,
   },
   {
-    "end": 704.264,
     "name": "label 5",
     "start": 567.075,
   },
   {
-    "end": 855.455,
     "name": "label 6",
     "start": 704.264,
+  },
+  {
+    "name": " ",
+    "start": 855.455,
   },
 ]
 `;
@@ -993,19 +1100,28 @@ exports[`parses pbf 2`] = `
 exports[`parses pbf 3`] = `
 [
   {
-    "end": 189.053,
     "name": "A",
     "start": 104.612,
   },
   {
-    "end": 476.194,
+    "name": " ",
+    "start": 189.053,
+  },
+  {
     "name": "B",
     "start": 300.448,
   },
   {
-    "end": 704.264,
+    "name": " ",
+    "start": 476.194,
+  },
+  {
     "name": "C",
     "start": 567.075,
+  },
+  {
+    "name": " ",
+    "start": 704.264,
   },
 ]
 `;
@@ -1013,14 +1129,20 @@ exports[`parses pbf 3`] = `
 exports[`parses pbf 4`] = `
 [
   {
-    "end": 189.053,
     "name": "A",
     "start": 104.612,
   },
   {
-    "end": 476.194,
+    "name": " ",
+    "start": 189.053,
+  },
+  {
     "name": "B",
     "start": 300.448,
+  },
+  {
+    "name": " ",
+    "start": 476.194,
   },
 ]
 `;

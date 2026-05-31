@@ -1,12 +1,20 @@
+import type { ChangeEventHandler } from 'react';
 import { memo, useState, useCallback, useRef, useEffect } from 'react';
 import { FaVolumeMute, FaVolumeUp } from 'react-icons/fa';
 import { useTranslation } from 'react-i18next';
 
+import useActionTitle from '../hooks/useActionTitle';
 
-function VolumeControl({ playbackVolume, setPlaybackVolume }: { playbackVolume: number, setPlaybackVolume: (a: number) => void }) {
+
+function VolumeControl({ playbackVolume, setPlaybackVolume, onToggleMutedClick }: {
+  playbackVolume: number,
+  setPlaybackVolume: (a: number) => void,
+  onToggleMutedClick: () => void,
+}) {
   const [volumeControlVisible, setVolumeControlVisible] = useState(false);
   const timeoutRef = useRef<number>();
   const { t } = useTranslation();
+  const actionTitle = useActionTitle();
 
   useEffect(() => {
     const clear = () => clearTimeout(timeoutRef.current);
@@ -15,19 +23,18 @@ function VolumeControl({ playbackVolume, setPlaybackVolume }: { playbackVolume: 
     return () => clear();
   }, [playbackVolume, volumeControlVisible]);
 
-  const onVolumeChange = useCallback((e) => {
+  const onVolumeChange = useCallback<ChangeEventHandler<HTMLInputElement>>((e) => {
     e.target.blur();
-    setPlaybackVolume(e.target.value / 100);
+    setPlaybackVolume(Number(e.target.value) / 100);
   }, [setPlaybackVolume]);
 
   const onVolumeIconClick = useCallback(() => {
     if (volumeControlVisible) {
-      if (playbackVolume === 0) setPlaybackVolume(1);
-      if (playbackVolume === 1) setPlaybackVolume(0);
+      onToggleMutedClick();
     } else {
       setVolumeControlVisible(true);
     }
-  }, [volumeControlVisible, setPlaybackVolume, playbackVolume]);
+  }, [onToggleMutedClick, volumeControlVisible]);
 
   const VolumeIcon = playbackVolume === 0 ? FaVolumeMute : FaVolumeUp;
 
@@ -39,15 +46,16 @@ function VolumeControl({ playbackVolume, setPlaybackVolume }: { playbackVolume: 
           min={0}
           max={100}
           value={playbackVolume * 100}
+          style={{ height: 30 }}
           onChange={onVolumeChange}
         />
       )}
 
       <VolumeIcon
-        title={t('Mute preview? (will not affect output)')}
+        title={actionTitle(t('Mute preview? (will not affect output)'), 'toggleMuted')}
         size={30}
         role="button"
-        style={{ margin: '0 7px', color: 'var(--gray12)', opacity: 0.7 }}
+        style={{ margin: '0 7px', color: 'var(--gray-12)', opacity: 0.7 }}
         onClick={onVolumeIconClick}
       />
     </>

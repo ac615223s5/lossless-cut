@@ -8,14 +8,14 @@ import { pathToFileURL } from 'node:url';
 if (process.platform === 'win32') {
   describe('file uri windows only', () => {
     test('converts path to file url', () => {
-      expect(pathToFileURL('C:\\Users\\sindresorhus\\dev\\te^st.jpg').href).toEqual('file:///C:/Users/sindresorhus/dev/te^st.jpg');
+      expect(pathToFileURL(String.raw`C:\Users\sindresorhus\dev\te^st.jpg`).href).toEqual('file:///C:/Users/sindresorhus/dev/te%5Est.jpg');
     });
   });
 } else {
   describe('file uri non-windows', () => {
     // https://github.com/mifi/lossless-cut/issues/1941
     test('file with backslash', () => {
-      expect(pathToFileURL('/has/back\\slash').href).toEqual('file:///has/back%5Cslash');
+      expect(pathToFileURL(String.raw`/has/back\slash`).href).toEqual('file:///has/back%5Cslash');
     });
   });
 }
@@ -25,11 +25,11 @@ describe('file uri both platforms', () => {
   test('converts path to file url', () => {
     expect(pathToFileURL('/test.jpg').href).toMatch(/^file:\/{3}.*test\.jpg$/);
 
-    expect(pathToFileURL('/Users/sindresorhus/dev/te^st.jpg').href).toMatch(/^file:\/{2}.*\/Users\/sindresorhus\/dev\/te\^st\.jpg$/);
+    expect(pathToFileURL('/Users/sindresorhus/dev/te^st.jpg').href).toMatch(/^file:\/{2}.*\/Users\/sindresorhus\/dev\/te%5Est\.jpg$/);
   });
 
   test('escapes more special characters in path', () => {
-    expect(pathToFileURL('/a^?!@#$%&\'";<>').href).toMatch(/^file:\/{3}.*a\^%3F!@%23\$%25&'%22;%3C%3E$/);
+    expect(pathToFileURL('/a^?!@#$%&\'";<>').href).toMatch(/^file:\/{3}.*a%5E%3F!@%23\$%25&'%22;%3C%3E$/);
   });
 
   test('escapes whitespace characters in path', () => {

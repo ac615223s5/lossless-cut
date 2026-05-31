@@ -1,13 +1,15 @@
-import { CSSProperties, Dispatch, SetStateAction, memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { motion } from 'framer-motion';
+import type { CSSProperties, ClipboardEvent, Dispatch, FormEvent, SetStateAction } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { motion } from 'motion/react';
 import { MdRotate90DegreesCcw } from 'react-icons/md';
 import { useTranslation } from 'react-i18next';
 import { IoIosCamera, IoMdKey, IoMdSpeedometer } from 'react-icons/io';
-import { FaYinYang, FaTrashAlt, FaStepBackward, FaStepForward, FaCaretLeft, FaCaretRight, FaPause, FaPlay, FaImages, FaKey, FaSun } from 'react-icons/fa';
+import { FaYinYang, FaTrashAlt, FaStepBackward, FaStepForward, FaCaretLeft, FaCaretRight, FaPause, FaPlay, FaImages, FaKey, FaExclamationTriangle } from 'react-icons/fa';
 import { GiSoundWaves } from 'react-icons/gi';
 // import useTraceUpdate from 'use-trace-update';
+import invariant from 'tiny-invariant';
 
-import { primaryTextColor, primaryColor, darkModeTransition } from './colors';
+import { primaryTextColor, primaryColor, darkModeTransition, dangerColor } from './colors';
 import SegmentCutpointButton from './components/SegmentCutpointButton';
 import SetCutpointButton from './components/SetCutpointButton';
 import ExportButton from './components/ExportButton';
@@ -16,15 +18,17 @@ import CaptureFormatButton from './components/CaptureFormatButton';
 import Select from './components/Select';
 
 import SimpleModeButton from './components/SimpleModeButton';
-import { withBlur, mirrorTransform, checkAppPath } from './util';
-import { toast } from './swal';
+import { withBlur, mirrorTransform } from './util';
+import getSwal from './swal';
 import { getSegColor as getSegColorRaw } from './util/colors';
 import { useSegColors } from './contexts';
 import { isExactDurationMatch } from './util/duration';
 import useUserSettings from './hooks/useUserSettings';
-import { askForPlaybackRate } from './dialogs';
-import { ApparentCutSegment, FormatTimecode, ParseTimecode, SegmentToExport, StateSegment } from './types';
-import { WaveformMode } from '../../../types';
+import useActionTitle from './hooks/useActionTitle';
+import { askForPlaybackRate, checkAppPath } from './dialogs';
+import type { FormatTimecode, GetFrameCount, ParseTimecode, PlaybackMode, SegmentColorIndex, SegmentToExport, StateSegment } from './types';
+import type { WaveformMode } from '../../common/types';
+import type { Frame } from './ffmpeg';
 
 const { clipboard } = window.require('electron');
 
@@ -33,6 +37,16 @@ const zoomOptions = Array.from({ length: 13 }).fill(undefined).map((_unused, z) 
 
 const leftRightWidth = 100;
 
+const timeWrapperStyle: CSSProperties = {
+  display: 'flex',
+  justifyContent: 'center',
+  alignItems: 'center',
+  position: 'absolute',
+  inset: 0,
+  marginLeft: '1.5em',
+  pointerEvents: 'none',
+};
+
 // eslint-disable-next-line react/display-name
 const InvertCutModeButton = memo(({ invertCutSegments, setInvertCutSegments }: { invertCutSegments: boolean, setInvertCutSegments: Dispatch<SetStateAction<boolean>> }) => {
   const { t } = useTranslation();
@@ -40,24 +54,25 @@ const InvertCutModeButton = memo(({ invertCutSegments, setInvertCutSegments }: {
   const onYinYangClick = useCallback(() => {
     setInvertCutSegments((v) => {
       const newVal = !v;
-      if (newVal) toast.fire({ title: t('When you export, selected segments on the timeline will be REMOVED - the surrounding areas will be KEPT') });
-      else toast.fire({ title: t('When you export, selected segments on the timeline will be KEPT - the surrounding areas will be REMOVED.') });
+      getSwal().toast.fire({
+        title: newVal
+          ? t('When you export, selected segments on the timeline will be REMOVED - the surrounding areas will be KEPT')
+          : t('When you export, selected segments on the timeline will be KEPT - the surrounding areas will be REMOVED.'),
+      });
       return newVal;
     });
   }, [setInvertCutSegments, t]);
 
   return (
-    <div style={{ marginLeft: 5 }}>
+    <div>
       <motion.div
-        style={{ width: 24, height: 24 }}
         animate={{ rotateX: invertCutSegments ? 0 : 180 }}
         transition={{ duration: 0.3 }}
       >
         <FaYinYang
-          size={24}
           role="button"
           title={invertCutSegments ? t('Discard selected segments') : t('Keep selected segments')}
-          style={{ color: invertCutSegments ? primaryTextColor : undefined }}
+          style={{ display: 'block', fontSize: '1.5em', color: invertCutSegments ? dangerColor : undefined }}
           onClick={onYinYangClick}
         />
       </motion.div>
@@ -67,14 +82,14 @@ const InvertCutModeButton = memo(({ invertCutSegments, setInvertCutSegments }: {
 
 
 // eslint-disable-next-line react/display-name
-const CutTimeInput = memo(({ darkMode, cutTime, setCutTime, startTimeOffset, seekAbs, currentCutSeg, currentApparentCutSeg, isStart, formatTimecode, parseTimecode }: {
+const CutTimeInput = memo(({ disabled, darkMode, cutTime, setCutTime, startTimeOffset, seekAbs, currentCutSeg, isStart, formatTimecode, parseTimecode }: {
+  disabled: boolean,
   darkMode: boolean,
-  cutTime: number,
-  setCutTime: (type: 'start' | 'end', v: number) => void,
+  cutTime: number | undefined,
+  setCutTime: (type: 'start' | 'end', v: number | undefined) => void,
   startTimeOffset: number,
   seekAbs: (a: number) => void,
-  currentCutSeg: StateSegment,
-  currentApparentCutSeg: ApparentCutSegment,
+  currentCutSeg: StateSegment | undefined,
   isStart?: boolean,
   formatTimecode: FormatTimecode,
   parseTimecode: ParseTimecode,
@@ -83,99 +98,162 @@ const CutTimeInput = memo(({ darkMode, cutTime, setCutTime, startTimeOffset, see
   const { getSegColor } = useSegColors();
 
   const [cutTimeManual, setCutTimeManual] = useState<string>();
+  const [error, setError] = useState<boolean>(false);
 
   // Clear manual overrides if upstream cut time has changed
   useEffect(() => {
+    // todo
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCutTimeManual(undefined);
-  }, [setCutTimeManual, currentApparentCutSeg.start, currentApparentCutSeg.end]);
+    setError(false);
+  }, [setCutTimeManual, currentCutSeg?.start, currentCutSeg?.end]);
 
-  const isCutTimeManualSet = () => cutTimeManual !== undefined;
+  const isCutTimeManualSet = useCallback(() => cutTimeManual !== undefined, [cutTimeManual]);
 
   const border = useMemo(() => {
     const segColor = getSegColor(currentCutSeg);
     return `.1em solid ${darkMode ? segColor.desaturate(0.4).lightness(50).string() : segColor.desaturate(0.2).lightness(60).string()}`;
   }, [currentCutSeg, darkMode, getSegColor]);
 
-  const cutTimeInputStyle: CSSProperties = {
-    border, borderRadius: 5, backgroundColor: 'var(--gray5)', transition: darkModeTransition, fontSize: 13, textAlign: 'center', padding: '1px 5px', marginTop: 0, marginBottom: 0, marginLeft: isStart ? 0 : 5, marginRight: isStart ? 5 : 0, boxSizing: 'border-box', fontFamily: 'inherit', width: 90, outline: 'none',
-  };
+  const setTime = useCallback((timeWithOffset: number | undefined) => {
+    // Note: If we get an error from setCutTime, remain in the editing state (cutTimeManual)
+    // https://github.com/mifi/lossless-cut/issues/988
 
-  const trySetTime = useCallback((timeWithOffset) => {
-    const timeWithoutOffset = Math.max(timeWithOffset - startTimeOffset, 0);
-    try {
-      setCutTime(isStart ? 'start' : 'end', timeWithoutOffset);
-      seekAbs(timeWithoutOffset);
+    if (timeWithOffset == null) { // clear time
+      invariant(!isStart);
+      setCutTime('end', undefined);
       setCutTimeManual(undefined);
-    } catch (err) {
-      console.error('Cannot set cut time', err);
-      // If we get an error from setCutTime, remain in the editing state (cutTimeManual)
-      // https://github.com/mifi/lossless-cut/issues/988
+      setError(false);
+      return;
     }
+
+    const timeWithoutOffset = Math.max(timeWithOffset - startTimeOffset, 0);
+    setCutTime(isStart ? 'start' : 'end', timeWithoutOffset);
+    seekAbs(timeWithoutOffset);
+    setCutTimeManual(undefined);
+    setError(false);
   }, [isStart, seekAbs, setCutTime, startTimeOffset]);
 
-  const handleSubmit = useCallback((e) => {
+  const isEmptyEndTime = useCallback((v: string | undefined) => !isStart && v?.trim() === '', [isStart]);
+
+  const handleSubmit = useCallback((e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
-    // Don't proceed if not a valid time value
-    const timeWithOffset = cutTimeManual != null ? parseTimecode(cutTimeManual) : undefined;
-    if (timeWithOffset === undefined) return;
+    try {
+      if (isEmptyEndTime(cutTimeManual)) {
+        setTime(undefined); // clear time
+        return;
+      }
 
-    trySetTime(timeWithOffset);
-  }, [cutTimeManual, parseTimecode, trySetTime]);
+      // Don't proceed if not a valid time value
+      const timeWithOffset = cutTimeManual != null ? parseTimecode(cutTimeManual) : undefined;
+      if (timeWithOffset === undefined) return;
 
-  const parseAndSetCutTime = useCallback((text) => {
+      setTime(timeWithOffset);
+    } catch (err) {
+      console.warn('Cannot submit cut time', err);
+    }
+  }, [cutTimeManual, isEmptyEndTime, parseTimecode, setTime]);
+
+  const parseAndSetCutTime = useCallback((text: string) => {
+    if (isEmptyEndTime(text)) {
+      setTime(undefined); // clear time
+      return;
+    }
+
     // Don't proceed if not a valid time value
     const timeWithOffset = parseTimecode(text);
     if (timeWithOffset === undefined) return;
 
-    trySetTime(timeWithOffset);
-  }, [parseTimecode, trySetTime]);
+    setTime(timeWithOffset);
+  }, [isEmptyEndTime, parseTimecode, setTime]);
 
-  function handleCutTimeInput(text) {
-    setCutTimeManual(text);
-
-    if (isExactDurationMatch(text)) parseAndSetCutTime(text);
-  }
-
-  const tryPaste = useCallback((clipboardText) => {
+  const handleCutTimeInput = useCallback((text: string) => {
     try {
-      setCutTimeManual(clipboardText);
-      parseAndSetCutTime(clipboardText);
+      if (isExactDurationMatch(text) || isEmptyEndTime(text)) {
+        parseAndSetCutTime(text);
+        return;
+      }
     } catch (err) {
-      console.error(err);
+      console.warn(err);
+      setError(true);
     }
-  }, [parseAndSetCutTime]);
 
-  const handleCutTimePaste = useCallback((e) => {
+    // else or if error, just set manual value, to make sure it doesn't jump to end https://github.com/mifi/lossless-cut/issues/988#issuecomment-3475870072
+    setCutTimeManual(text);
+  }, [isEmptyEndTime, parseAndSetCutTime]);
+
+  const handleInputBlur = useCallback(() => {
+    setCutTimeManual(undefined);
+    setError(false);
+  }, []);
+
+  const handleCutTimePaste = useCallback((e: ClipboardEvent<HTMLInputElement>) => {
     e.preventDefault();
 
     try {
       const clipboardData = e.clipboardData.getData('Text');
       setCutTimeManual(clipboardData);
       parseAndSetCutTime(clipboardData);
+      setError(false);
     } catch (err) {
-      console.error(err);
+      console.warn(err);
+      setError(true);
     }
   }, [parseAndSetCutTime]);
 
   const handleContextMenu = useCallback(() => {
     const text = clipboard.readText();
-    if (text) tryPaste(text);
-  }, [tryPaste]);
+    if (text) {
+      try {
+        setCutTimeManual(text);
+        parseAndSetCutTime(text);
+        setError(false);
+      } catch (err) {
+        console.warn(err);
+        setError(true);
+      }
+    }
+  }, [parseAndSetCutTime]);
+
+  const style = useMemo<CSSProperties>(() => ({
+    border,
+    borderRadius: 5,
+    backgroundColor: 'var(--gray-5)',
+    transition: darkModeTransition,
+    fontSize: 13,
+    textAlign: 'center',
+    padding: '1px 3px',
+    marginTop: 0,
+    marginBottom: 0,
+    marginLeft: isStart ? 0 : 5,
+    marginRight: isStart ? 5 : 0,
+    boxSizing: 'border-box',
+    fontFamily: 'monospace',
+    letterSpacing: '-.05em',
+    width: 94,
+    outline: 'none',
+    color: error ? dangerColor : (isCutTimeManualSet() ? 'var(--gray-12)' : 'var(--gray-11)'),
+  }), [border, error, isCutTimeManualSet, isStart]);
+
+  function renderValue() {
+    if (isCutTimeManualSet()) return cutTimeManual;
+    if (cutTime == null) return formatTimecode({ seconds: 0 }); // marker, see https://github.com/mifi/lossless-cut/issues/2590
+    return formatTimecode({ seconds: cutTime + startTimeOffset });
+  }
 
   return (
     <form onSubmit={handleSubmit}>
       <input
-        style={{ ...cutTimeInputStyle, color: isCutTimeManualSet() ? 'var(--red11)' : 'var(--gray12)' }}
+        disabled={disabled}
+        style={style}
         type="text"
         title={isStart ? t('Manually input current segment\'s start time') : t('Manually input current segment\'s end time')}
         onChange={(e) => handleCutTimeInput(e.target.value)}
         onPaste={handleCutTimePaste}
-        onBlur={() => setCutTimeManual(undefined)}
+        onBlur={handleInputBlur}
         onContextMenu={handleContextMenu}
-        value={isCutTimeManualSet()
-          ? cutTimeManual
-          : formatTimecode({ seconds: cutTime + startTimeOffset })}
+        value={renderValue()}
       />
     </form>
   );
@@ -187,16 +265,17 @@ function BottomBar({
   captureSnapshot, onExportPress, segmentsToExport, hasVideo,
   seekAbs, currentSegIndexSafe, cutSegments, currentCutSeg, setCutStart, setCutEnd,
   setCurrentSegIndex,
-  jumpTimelineStart, jumpTimelineEnd, jumpCutEnd, jumpCutStart, startTimeOffset, setCutTime, currentApparentCutSeg,
+  jumpTimelineStart, jumpTimelineEnd, jumpCutEnd, jumpCutStart, startTimeOffset, setCutTime,
   playing, shortStep, togglePlay, toggleLoopSelectedSegments, hasAudio,
   keyframesEnabled, toggleShowKeyframes, seekClosestKeyframe, detectedFps, isFileOpened, selectedSegments,
-  darkMode, setDarkMode,
+  darkMode,
   toggleShowThumbnails, toggleWaveformMode, waveformMode, showThumbnails,
   outputPlaybackRate, setOutputPlaybackRate,
-  formatTimecode, parseTimecode,
+  formatTimecode, parseTimecode, playbackRate,
+  currentFrame, playbackMode, displayTime, fileDurationNonZero, getFrameCount,
 }: {
   zoom: number,
-  setZoom: Dispatch<SetStateAction<number>>,
+  setZoom: (fn: (z: number) => number) => void,
   timelineToggleComfortZoom: () => void,
   isRotationSet: boolean,
   rotation: number,
@@ -210,7 +289,7 @@ function BottomBar({
   seekAbs: (a: number) => void,
   currentSegIndexSafe: number,
   cutSegments: StateSegment[],
-  currentCutSeg: StateSegment,
+  currentCutSeg: StateSegment | undefined,
   setCutStart: () => void,
   setCutEnd: () => void,
   setCurrentSegIndex: Dispatch<SetStateAction<number>>,
@@ -219,8 +298,7 @@ function BottomBar({
   jumpCutEnd: () => void,
   jumpCutStart: () => void,
   startTimeOffset: number,
-  setCutTime: (type: 'start' | 'end', v: number) => void,
-  currentApparentCutSeg: ApparentCutSegment,
+  setCutTime: (type: 'start' | 'end', v: number | undefined) => void,
   playing: boolean,
   shortStep: (a: number) => void,
   togglePlay: () => void,
@@ -231,9 +309,8 @@ function BottomBar({
   seekClosestKeyframe: (a: number) => void,
   detectedFps: number | undefined,
   isFileOpened: boolean,
-  selectedSegments: ApparentCutSegment[],
+  selectedSegments: SegmentColorIndex[],
   darkMode: boolean,
-  setDarkMode: Dispatch<SetStateAction<boolean>>,
   toggleShowThumbnails: () => void,
   toggleWaveformMode: () => void,
   waveformMode: WaveformMode | undefined,
@@ -242,14 +319,41 @@ function BottomBar({
   setOutputPlaybackRate: (v: number) => void,
   formatTimecode: FormatTimecode,
   parseTimecode: ParseTimecode,
+  playbackRate: number,
+  currentFrame: Frame | undefined,
+  playbackMode: PlaybackMode | undefined,
+  displayTime: number,
+  fileDurationNonZero: number,
+  getFrameCount: GetFrameCount,
 }) {
   const { t } = useTranslation();
   const { getSegColor } = useSegColors();
 
+  const isZoomed = zoom > 1;
+
+  const playStyle = useMemo<CSSProperties>(() => ({
+    paddingLeft: playing ? 0 : '.1em',
+    color: 'white',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '2.3em',
+    height: '2.3em',
+    borderRadius: '50%',
+    boxSizing: 'border-box',
+  }), [playing]);
+
   // ok this is a bit over-engineered but what the hell!
-  const loopSelectedSegmentsButtonStyle = useMemo(() => {
-    // cannot have less than 1 gradient element:
-    const selectedSegmentsSafe = (selectedSegments.length > 1 ? selectedSegments : [selectedSegments[0]!, selectedSegments[0]!]).slice(0, 10);
+  const loopSelectedSegmentsButtonStyle = useMemo<CSSProperties>(() => {
+    // need at least 2 gradient elements:
+    const selectedSegmentsSafe = (
+      selectedSegments.length >= 2
+        ? selectedSegments
+        : [
+          selectedSegments[0] ?? { segColorIndex: 0 },
+          selectedSegments[1] ?? { segColorIndex: 1 },
+        ]
+    ).slice(0, 10);
 
     const gradientColors = selectedSegmentsSafe.map((seg, i) => {
       const segColor = getSegColorRaw(seg);
@@ -258,22 +362,20 @@ function BottomBar({
     }).join(', ');
 
     return {
-      paddingLeft: 2,
+      ...playStyle,
+      fontSize: '.7em',
       backgroundOffset: 30,
       background: `linear-gradient(90deg, ${gradientColors})`,
-      border: '1px solid var(--gray8)',
-      color: 'white',
-      margin: '0px 5px 0 0px',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      width: 20,
-      height: 24,
-      borderRadius: 4,
+      border: '1px solid var(--gray-10)',
     };
-  }, [selectedSegments]);
+  }, [playStyle, selectedSegments]);
+
+  const keyframeStyle = useMemo(() => ({
+    color: currentFrame != null && currentFrame.keyframe ? primaryTextColor : undefined,
+  }), [currentFrame]);
 
   const { invertCutSegments, setInvertCutSegments, simpleMode, toggleSimpleMode, exportConfirmEnabled } = useUserSettings();
+  const actionTitle = useActionTitle();
 
   const rotationStr = `${rotation}°`;
 
@@ -286,7 +388,12 @@ function BottomBar({
     if (newRate != null) setOutputPlaybackRate(newRate);
   }, [detectedFps, outputPlaybackRate, setOutputPlaybackRate]);
 
-  function renderJumpCutpointButton(direction) {
+  const playbackRateRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    playbackRateRef.current?.animate([{ transform: 'scale(2)', color: 'var(--gray-12)', backgroundColor: playbackRate === 1 ? 'var(--cyan-10)' : (playbackRate < 1 ? 'var(--yellow-8)' : 'var(--orange-10)') }, {}], { duration: 200 });
+  }, [playbackRate]);
+
+  function renderJumpCutpointButton(direction: number) {
     const newIndex = currentSegIndexSafe + direction;
     const seg = cutSegments[newIndex];
 
@@ -311,39 +418,39 @@ function BottomBar({
   }
 
   const PlayPause = playing ? FaPause : FaPlay;
+  const PlayPauseMode = playing && (playbackMode === 'play-selected-segments' || playbackMode === 'loop-selected-segments') ? FaPause : FaPlay;
+
+  const currentCutSegOrDefault = useMemo(() => currentCutSeg ?? { segColorIndex: 0 }, [currentCutSeg]);
+
+  const displayTimeFrameCount = useMemo(() => getFrameCount(displayTime), [displayTime, getFrameCount]);
 
   return (
     <>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="no-user-select" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', opacity: isFileOpened ? 1 : 0.5 }}>
         <div style={{ display: 'flex', alignItems: 'center', flexBasis: leftRightWidth }}>
           {!simpleMode && (
             <>
-              <FaSun color="var(--gray12)" role="button" onClick={() => setDarkMode((v) => !v)} style={{ padding: '0 .2em 0 .3em' }} />
-
               {hasAudio && (
                 <GiSoundWaves
-                  size={24}
-                  style={{ padding: '0 .1em', color: waveformMode != null && ['big-waveform', 'waveform'].includes(waveformMode) ? primaryTextColor : undefined }}
+                  style={{ fontSize: '1.6em', padding: '0 .1em', color: waveformMode != null ? primaryTextColor : undefined }}
                   role="button"
-                  title={t('Show waveform')}
+                  title={actionTitle(t('Show waveform'), 'toggleWaveformMode')}
                   onClick={() => toggleWaveformMode()}
                 />
               )}
               {hasVideo && (
                 <>
                   <FaImages
-                    size={20}
-                    style={{ padding: '0 .2em', color: showThumbnails ? primaryTextColor : undefined }}
+                    style={{ fontSize: '1.1em', padding: '0 .2em', color: showThumbnails ? primaryTextColor : undefined }}
                     role="button"
-                    title={t('Show thumbnails')}
+                    title={actionTitle(t('Show thumbnails'), 'toggleShowThumbnails')}
                     onClick={toggleShowThumbnails}
                   />
 
                   <FaKey
-                    size={16}
-                    style={{ padding: '0 .2em', color: keyframesEnabled ? primaryTextColor : undefined }}
+                    style={{ fontSize: '1em', padding: '0 .2em', color: keyframesEnabled ? primaryTextColor : undefined }}
                     role="button"
-                    title={t('Show keyframes')}
+                    title={actionTitle(t('Show keyframes'), 'toggleShowKeyframes')}
                     onClick={toggleShowKeyframes}
                   />
                 </>
@@ -359,44 +466,43 @@ function BottomBar({
             <FaStepBackward
               size={16}
               style={{ flexShrink: 0 }}
-              title={t('Jump to start of video')}
+              title={actionTitle(t('Jump to start of video'), 'jumpTimelineStart')}
               role="button"
               onClick={jumpTimelineStart}
             />
 
             {renderJumpCutpointButton(-1)}
 
-            <SegmentCutpointButton currentCutSeg={currentCutSeg} side="start" Icon={FaStepBackward} onClick={jumpCutStart} title={t('Jump to current segment\'s start time')} style={{ marginRight: 5 }} />
+            <SegmentCutpointButton currentCutSeg={currentCutSeg} side="start" Icon={FaStepBackward} onClick={jumpCutStart} title={actionTitle(t('Jump to current segment\'s start time'), 'jumpCutStart')} style={{ marginRight: 5 }} />
           </>
         )}
 
-        <SetCutpointButton currentCutSeg={currentCutSeg} side="start" onClick={setCutStart} title={t('Start current segment at current time')} style={{ marginRight: 5 }} />
+        <SetCutpointButton currentCutSeg={currentCutSegOrDefault} side="start" onClick={setCutStart} title={actionTitle(t('Start current segment at current time'), 'setCutStart')} style={{ marginRight: 5 }} />
 
-        {!simpleMode && <CutTimeInput darkMode={darkMode} currentCutSeg={currentCutSeg} currentApparentCutSeg={currentApparentCutSeg} startTimeOffset={startTimeOffset} seekAbs={seekAbs} cutTime={currentApparentCutSeg.start} setCutTime={setCutTime} isStart formatTimecode={formatTimecode} parseTimecode={parseTimecode} />}
+        {!simpleMode && <CutTimeInput disabled={!isFileOpened} darkMode={darkMode} currentCutSeg={currentCutSeg} startTimeOffset={startTimeOffset} seekAbs={seekAbs} cutTime={currentCutSeg?.start} setCutTime={setCutTime} isStart formatTimecode={formatTimecode} parseTimecode={parseTimecode} />}
 
-        <IoMdKey
-          size={25}
-          role="button"
-          title={t('Seek previous keyframe')}
-          style={{ flexShrink: 0, marginRight: 2, transform: mirrorTransform }}
-          onClick={() => seekClosestKeyframe(-1)}
-        />
+        {keyframesEnabled && (
+          <IoMdKey
+            size={25}
+            role="button"
+            title={actionTitle(t('Seek previous keyframe'), 'seekBackwardsKeyframe')}
+            style={{ flexShrink: 0, marginRight: 2, transform: mirrorTransform, ...keyframeStyle }}
+            onClick={() => seekClosestKeyframe(-1)}
+          />
+        )}
 
         {!simpleMode && (
           <FaCaretLeft
             style={{ flexShrink: 0, marginLeft: -6, marginRight: -4 }}
             size={28}
             role="button"
-            title={t('One frame back')}
+            title={actionTitle(t('One frame back'), 'seekPreviousFrame')}
             onClick={() => shortStep(-1)}
           />
         )}
 
-        <div role="button" onClick={() => togglePlay()} style={{ background: primaryColor, margin: '2px 5px 0 5px', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 17, color: 'white' }}>
-          <PlayPause
-            style={{ paddingLeft: playing ? 0 : 2 }}
-            size={16}
-          />
+        <div title={actionTitle(t('Play/pause'), 'togglePlayResetSpeed')} role="button" onClick={() => togglePlay()} style={{ ...playStyle, margin: '.1em .1em 0 .2em', background: primaryColor }}>
+          <PlayPause style={{ fontSize: '.9em' }} />
         </div>
 
         {!simpleMode && (
@@ -404,33 +510,35 @@ function BottomBar({
             style={{ flexShrink: 0, marginRight: -6, marginLeft: -4 }}
             size={28}
             role="button"
-            title={t('One frame forward')}
+            title={actionTitle(t('One frame forward'), 'seekNextFrame')}
             onClick={() => shortStep(1)}
           />
         )}
 
-        <IoMdKey
-          style={{ flexShrink: 0, marginLeft: 2 }}
-          size={25}
-          role="button"
-          title={t('Seek next keyframe')}
-          onClick={() => seekClosestKeyframe(1)}
-        />
+        {keyframesEnabled && (
+          <IoMdKey
+            style={{ flexShrink: 0, marginLeft: 2, ...keyframeStyle }}
+            size={25}
+            role="button"
+            title={actionTitle(t('Seek next keyframe'), 'seekForwardsKeyframe')}
+            onClick={() => seekClosestKeyframe(1)}
+          />
+        )}
 
-        {!simpleMode && <CutTimeInput darkMode={darkMode} currentCutSeg={currentCutSeg} currentApparentCutSeg={currentApparentCutSeg} startTimeOffset={startTimeOffset} seekAbs={seekAbs} cutTime={currentApparentCutSeg.end} setCutTime={setCutTime} formatTimecode={formatTimecode} parseTimecode={parseTimecode} />}
+        {!simpleMode && <CutTimeInput disabled={!isFileOpened} darkMode={darkMode} currentCutSeg={currentCutSeg} startTimeOffset={startTimeOffset} seekAbs={seekAbs} cutTime={currentCutSeg?.end} setCutTime={setCutTime} formatTimecode={formatTimecode} parseTimecode={parseTimecode} />}
 
-        <SetCutpointButton currentCutSeg={currentCutSeg} side="end" onClick={setCutEnd} title={t('End current segment at current time')} style={{ marginLeft: 5 }} />
+        <SetCutpointButton currentCutSeg={currentCutSeg} side="end" onClick={setCutEnd} title={actionTitle(t('End current segment at current time'), 'setCutEnd')} style={{ marginLeft: 5 }} />
 
         {!simpleMode && (
           <>
-            <SegmentCutpointButton currentCutSeg={currentCutSeg} side="end" Icon={FaStepForward} onClick={jumpCutEnd} title={t('Jump to current segment\'s end time')} style={{ marginLeft: 5 }} />
+            <SegmentCutpointButton currentCutSeg={currentCutSeg} side="end" Icon={FaStepForward} onClick={jumpCutEnd} title={actionTitle(t('Jump to current segment\'s end time'), 'jumpCutEnd')} style={{ marginLeft: 5 }} />
 
             {renderJumpCutpointButton(1)}
 
             <FaStepForward
               size={16}
               style={{ flexShrink: 0 }}
-              title={t('Jump to end of video')}
+              title={actionTitle(t('Jump to end of video'), 'jumpTimelineEnd')}
               role="button"
               onClick={jumpTimelineEnd}
             />
@@ -442,82 +550,96 @@ function BottomBar({
         <div style={{ flexBasis: leftRightWidth }} />
       </div>
 
-      <div
-        className="no-user-select"
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '3px 4px' }}
-      >
-        <SimpleModeButton style={{ flexShrink: 0 }} />
+      <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '.1em .3em', gap: '.5em', height: '2em' }}>
+        <InvertCutModeButton invertCutSegments={invertCutSegments} setInvertCutSegments={setInvertCutSegments} />
 
-        {simpleMode && <div role="button" onClick={toggleSimpleMode} style={{ marginLeft: 5, fontSize: '90%' }}>{t('Toggle advanced view')}</div>}
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <SimpleModeButton />
 
-        {!simpleMode && (
+          {simpleMode && (
+            <div role="button" onClick={toggleSimpleMode} style={{ fontSize: '.8em', marginLeft: '.2em' }}>{t('Toggle advanced view')}</div>
+          )}
+        </div>
+
+        {isFileOpened && !simpleMode && (
           <>
-            <InvertCutModeButton invertCutSegments={invertCutSegments} setInvertCutSegments={setInvertCutSegments} />
+            <div role="button" title={t('Zoom')} onClick={timelineToggleComfortZoom}>{Math.floor(zoom)}x</div>
 
-            <div role="button" style={{ marginRight: 5, marginLeft: 10 }} title={t('Zoom')} onClick={timelineToggleComfortZoom}>{Math.floor(zoom)}x</div>
-
-            <Select style={{ height: 20, flexBasis: 85, flexGrow: 0 }} value={zoomOptions.includes(zoom) ? zoom.toString() : ''} title={t('Zoom')} onChange={withBlur((e) => setZoom(parseInt(e.target.value, 10)))}>
+            <Select style={{ width: '4.5em' }} value={zoomOptions.includes(zoom) ? zoom.toString() : ''} title={t('Zoom')} onChange={withBlur((e) => setZoom(() => parseInt(e.target.value, 10)))}>
               <option key="" value="" disabled>{t('Zoom')}</option>
               {zoomOptions.map((val) => (
                 <option key={val} value={String(val)}>{t('Zoom')} {val}x</option>
               ))}
             </Select>
 
-            {detectedFps != null && (
-              <div title={t('Video FPS')} role="button" onClick={handleChangePlaybackRateClick} style={{ color: 'var(--gray11)', fontSize: '.7em', marginLeft: 6 }}>{(detectedFps * outputPlaybackRate).toFixed(3)}</div>
-            )}
+            <div ref={playbackRateRef} title={t('Playback rate')} style={{ color: 'var(--gray-11)', fontSize: '.7em', borderRadius: '.5em' }}>{playbackRate.toFixed(1)}</div>
 
-            <IoMdSpeedometer title={t('Change FPS')} style={{ padding: '0 .2em', fontSize: '1.3em' }} role="button" onClick={handleChangePlaybackRateClick} />
+            <div style={{ whiteSpace: 'nowrap' }}>
+              <IoMdSpeedometer title={t('Change FPS')} style={{ fontSize: '1.3em', verticalAlign: 'middle' }} role="button" onClick={handleChangePlaybackRateClick} />
+
+              {detectedFps != null && (
+                <span title={t('Video FPS')} role="button" onClick={handleChangePlaybackRateClick} style={{ color: 'var(--gray-11)', fontSize: '.7em', marginLeft: '.3em' }}>{(detectedFps * outputPlaybackRate).toFixed(3)}</span>
+              )}
+            </div>
           </>
+        )}
+
+        {isFileOpened && !simpleMode && hasVideo && (
+          <div onClick={increaseRotation} role="button" style={{ whiteSpace: 'nowrap' }}>
+            <MdRotate90DegreesCcw
+              style={{ fontSize: '1.3em', verticalAlign: 'middle', color: isRotationSet ? primaryTextColor : undefined }}
+              title={actionTitle(`${t('Set output rotation. Current: ')} ${isRotationSet ? rotationStr : t('Don\'t modify')}`, 'increaseRotation')}
+            />
+            <span style={{ textAlign: 'right', display: 'inline-block', fontSize: '.8em', marginLeft: '.1em' }}>{isRotationSet && rotationStr}</span>
+          </div>
         )}
 
         <div style={{ flexGrow: 1 }} />
 
-        {hasVideo && (
-          <>
-            <span style={{ textAlign: 'right', display: 'inline-block' }}>{isRotationSet && rotationStr}</span>
-            <MdRotate90DegreesCcw
-              size={24}
-              style={{ margin: '0px 0px 0 2px', verticalAlign: 'middle', color: isRotationSet ? primaryTextColor : undefined }}
-              title={`${t('Set output rotation. Current: ')} ${isRotationSet ? rotationStr : t('Don\'t modify')}`}
-              onClick={increaseRotation}
-              role="button"
-            />
-          </>
-        )}
+        <div style={timeWrapperStyle}>
+          <div style={{ fontFamily: 'monospace', letterSpacing: '-0.08em', pointerEvents: 'auto' }}>
+            {formatTimecode({ seconds: displayTime })}
+            <span style={{ display: 'inline-block', minWidth: '3.5em', marginLeft: '.5em' }}>
+              {displayTimeFrameCount ?? 0}<span style={{ opacity: 0.5, userSelect: 'none' }}>f</span>
+              {isZoomed && <span style={{ marginLeft: '.5em' }}>{Math.round((displayTime / fileDurationNonZero) * 100)}<span style={{ opacity: 0.5, userSelect: 'none' }}>%</span></span>}
+            </span>
+          </div>
+        </div>
 
         {!simpleMode && isFileOpened && (
           <FaTrashAlt
-            title={t('Close file and clean up')}
-            style={{ padding: '5px 10px' }}
-            size={16}
+            title={actionTitle(t('Close file and clean up'), 'cleanupFilesDialog')}
+            style={{ fontSize: '1em', color: dangerColor }}
             onClick={cleanupFilesDialog}
             role="button"
           />
         )}
 
         {hasVideo && (
-          <>
-            {!simpleMode && <CaptureFormatButton height={20} />}
-
+          <div style={{ whiteSpace: 'nowrap' }}>
             <IoIosCamera
-              style={{ paddingLeft: 5, paddingRight: 15 }}
-              size={25}
-              title={t('Capture frame')}
+              role="button"
+              style={{ fontSize: '1.9em', verticalAlign: 'middle' }}
+              title={actionTitle(t('Capture frame'), 'captureSnapshot')}
               onClick={captureSnapshot}
             />
-          </>
+
+            {!simpleMode && <CaptureFormatButton style={{ width: '3.7em', textAlign: 'center', marginLeft: '.1em' }} />}
+          </div>
         )}
 
-        <div role="button" onClick={toggleLoopSelectedSegments} title={t('Play selected segments in order')} style={loopSelectedSegmentsButtonStyle}>
-          <FaPlay
-            size={14}
-          />
-        </div>
+        {isFileOpened && (
+          <div role="button" onClick={toggleLoopSelectedSegments} title={actionTitle(t('Play selected segments in order'), 'toggleLoopSelectedSegments')} style={loopSelectedSegmentsButtonStyle}>
+            <PlayPauseMode />
+          </div>
+        )}
 
-        {(!simpleMode || !exportConfirmEnabled) && <ToggleExportConfirm style={{ marginRight: 5 }} />}
+        {!exportConfirmEnabled && (<FaExclamationTriangle style={{ color: dangerColor, marginLeft: '.4em' }} title={t('Export options screen is disabled, and you will not see any important notices or warnings.')} />)}
+        {(!simpleMode || !exportConfirmEnabled) && <ToggleExportConfirm style={{ marginLeft: exportConfirmEnabled ? '.4em' : undefined }} />}
 
-        <ExportButton size={1.3} segmentsToExport={segmentsToExport} areWeCutting={areWeCutting} onClick={onExportPress} />
+        {isFileOpened && (
+          <ExportButton segmentsToExport={segmentsToExport} areWeCutting={areWeCutting} onClick={withBlur(onExportPress)} />
+        )}
       </div>
     </>
   );
